@@ -1,7 +1,7 @@
 class DataExtractor:
     def __init__(self, folder_path):
         self.folder_path = folder_path
-        self.all_data = []
+        self.all_data = pd.DataFrame(columns = ['full_name', 'address_info', 'email', 'phone_numbers', 'ssn', 'drivers_license', 'passport_number', 'national_id', 'bank_accounts', 'credit_cards', 'debit_cards', 'payment_card_details', 'medical_records', 'health_insurance_info', 'patient_identifiers', 'fingerprints', 'facial_recognition_data', 'voiceprints', 'retina_iris_scans', 'date_of_birth', 'place_of_birth','file_name'])
 
     def initialize_model(self):
         if not os.getenv("TOGETHER_API_KEY"):
