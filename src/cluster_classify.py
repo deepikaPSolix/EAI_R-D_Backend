@@ -1,16 +1,15 @@
 from typing import List
 import pandas as pd
 import numpy as np
-import sklearn
 from doc_file import DocFile
 from llm_model import LLMModel
 from models.label_governance_model import LabelGovernanceModel
-from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.ensemble import RandomForestClassifier
+import pickle
 
 
 class ClusterAndClassify:
@@ -61,14 +60,15 @@ class ClusterAndClassify:
 
     def cluster_classify(self, data: List[DocFile], partition_size = 0.7):
         data_dict = [d.to_dict() for d in data]
-        df = pd.DataFrame(data_dict)
+        data_partition = int(np.floor(len(data_dict) * partition_size))
+        cluster_data = data_dict[:data_partition]
+        classification_data = data_dict[data_partition:]
 
         # df['combined_text'] = df[df.columns].apply(lambda row: ' | '.join(row.values.astype(str)), axis=1)
 
-        data_partition = int(np.floor(len(df) * partition_size))
 
-        clustering_df = df.iloc[:data_partition]
-        classfication_df = df.iloc[data_partition:]
+        clustering_df = pd.DataFrame(cluster_data)
+        classfication_df = pd.DataFrame(classification_data)
         print('Clustering_df: ', clustering_df.shape,'\n', 'Classfication_df: ', classfication_df.shape)
 
         tfidf_vectorizer = TfidfVectorizer()
@@ -83,23 +83,39 @@ class ClusterAndClassify:
         cluster_X = clustering_df['data']
         cluster_y = clustering_df['cluster_labels']
 
-        tfidf_vectorizer = TfidfVectorizer()
-        cluster_X_tfidf = tfidf_vectorizer.fit_transform(cluster_X)
+    
+        self.train_classifier(cluster_X, cluster_y)
 
-        classifier = RandomForestClassifier(random_state=42)
-        classifier.fit(cluster_X_tfidf, cluster_y)
-
-        classify_X = classfication_df['data']
-        classify_X_tfidf = tfidf_vectorizer.transform(classify_X)
-
-        predicted_labels = classifier.predict(classify_X_tfidf)
-
-        # Store the predicted labels back to the DataFrame
-        classfication_df['cluster_labels'] = predicted_labels
+        classfication_df = self.classify_data(classification_data)
 
         final_df = pd.concat([clustering_df, classfication_df], ignore_index=True)
 
         return final_df
+    
+    def train_classifier(self, data, labels):
+        tfidf_vectorizer = TfidfVectorizer()
+        cluster_X_tfidf = tfidf_vectorizer.fit_transform(data)
+
+        classifier = RandomForestClassifier(random_state=42)
+        classifier.fit(cluster_X_tfidf, labels)
+
+        with open('ml_model/doc_classifier_model.pkl', 'wb') as file:
+            pickle.dump(classifier, file)
+
+    def classify_data(self, data: List[DocFile]):
+        classfication_df = [d.to_dict() for d in data]
+        classify_X = classfication_df['data']
+
+        tfidf_vectorizer = TfidfVectorizer()
+        classify_X_tfidf = tfidf_vectorizer.transform(classify_X)
+
+        with open('ml_model/doc_classifier_model.pkl', 'rb') as file:
+            classifier = pickle.load(file)
+
+        predicted_labels = classifier.predict(classify_X_tfidf)
+        classfication_df['cluster_labels'] = predicted_labels
+        return classfication_df
+
     
     def generate_cluster_labels(self, cluster_df):
         model = LLMModel()
