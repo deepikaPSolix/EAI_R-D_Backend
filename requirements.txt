@@ -12,5 +12,4 @@ together
 langchain-together
 langchain_core
 json
-"unstructured[pdf]"
 pytesseract
