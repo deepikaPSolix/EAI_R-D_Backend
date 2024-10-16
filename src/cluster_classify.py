@@ -5,7 +5,6 @@ from doc_file import DocFile
 from llm_model import LLMModel
 from models.label_governance_model import LabelGovernanceModel
 from sklearn.feature_extraction.text import TfidfVectorizer
-import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.ensemble import RandomForestClassifier

@@ -1,0 +1,5 @@
+services:
+  flask-server:
+    build: ./src  # Path to the Flask app directory
+    ports:
+      - "5000:5000"
