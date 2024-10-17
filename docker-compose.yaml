@@ -1,5 +1,34 @@
 services:
-  flask-server:
-    build: ./src  # Path to the Flask app directory
+  flask-app:
+    build: ./src
+    container_name: flask-app
+    restart: always
     ports:
       - "5000:5000"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6380/0
+      - CELERY_RESULT_BACKEND=redis://redis:6380/0
+    depends_on:
+      - redis
+    volumes:
+      - ./app:/app
+
+  celery-worker:
+    build: ./src
+    container_name: celery-worker
+    restart: always
+    command: celery -A server.celery worker --loglevel=info
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6380/0
+      - CELERY_RESULT_BACKEND=redis://redis:6380/0
+    depends_on:
+      - redis
+    volumes:
+      - ./app:/app
+
+  redis:
+    image: "redis:alpine"
+    container_name: redis
+    ports:
+      - "6380:6380"
+    restart: always
