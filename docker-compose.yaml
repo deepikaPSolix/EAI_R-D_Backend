@@ -6,12 +6,12 @@ services:
     ports:
       - "5000:5000"
     environment:
-      - CELERY_BROKER_URL=redis://redis:6380/0
-      - CELERY_RESULT_BACKEND=redis://redis:6380/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
       - redis
     volumes:
-      - ./app:/app
+      - ./src:/app
 
   celery-worker:
     build: ./src
@@ -19,16 +19,16 @@ services:
     restart: always
     command: celery -A server.celery worker --loglevel=info
     environment:
-      - CELERY_BROKER_URL=redis://redis:6380/0
-      - CELERY_RESULT_BACKEND=redis://redis:6380/0
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
     depends_on:
       - redis
     volumes:
-      - ./app:/app
+      - ./src:/app
 
   redis:
-    image: "redis:alpine"
+    image: "redis"
     container_name: redis
     ports:
-      - "6380:6380"
+      - "6380:6379"
     restart: always
