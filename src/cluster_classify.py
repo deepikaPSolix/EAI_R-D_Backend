@@ -5,11 +5,11 @@ from doc_file import DocFile
 from llm_model import LLMModel
 from models.label_governance_model import LabelGovernanceModel
 from sklearn.feature_extraction.text import TfidfVectorizer
-import matplotlib.pyplot as plt
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.ensemble import RandomForestClassifier
 import pickle
+import os
 
 
 class ClusterAndClassify:
@@ -36,25 +36,6 @@ class ClusterAndClassify:
         
         kmeans_model = KMeans(n_clusters=best_k, random_state=42)
         kmeans_model.fit(data)
-        
-        # Plotting Elbow Method and Silhouette Scores for reference
-        plt.figure(figsize=(12, 6))
-
-        # Plot inertia (Elbow Method)
-        plt.subplot(1, 2, 1)
-        plt.plot(cluster_range, inertia, marker='o')
-        plt.title('Elbow Method')
-        plt.xlabel('Number of Clusters')
-        plt.ylabel('Inertia')
-
-        # Plot silhouette scores
-        plt.subplot(1, 2, 2)
-        plt.plot(cluster_range, silhouette_scores, marker='o')
-        plt.title('Silhouette Score')
-        plt.xlabel('Number of Clusters')
-        plt.ylabel('Silhouette Score')
-
-        plt.show()
         
         return best_k, kmeans_model
 
@@ -97,22 +78,21 @@ class ClusterAndClassify:
 
         classifier = RandomForestClassifier(random_state=42)
         classifier.fit(cluster_X_tfidf, labels)
-
-        with open('doc_classifier_model.pkl', 'wb') as file:
+        with open(os.path.join("ml-model", 'doc_classifier_model.pkl'), 'wb') as file:
             pickle.dump(classifier, file)
 
-        with open('tfidf_vectorizer.pkl', 'wb') as file:
+        with open(os.path.join("ml-model", 'tfidf_vectorizer.pkl'), 'wb') as file:
             pickle.dump(tfidf_vectorizer, file)
 
     def classify_data(self, data: List[DocFile]):
         classfication_df = pd.DataFrame([d.to_dict() for d in data])
         classify_X = classfication_df['data']
 
-        with open('tfidf_vectorizer.pkl', 'rb') as file:
+        with open(os.path.join("ml-model", 'tfidf_vectorizer.pkl'), 'rb') as file:
             tfidf_vectorizer = pickle.load(file)
         classify_X_tfidf = tfidf_vectorizer.transform(classify_X)
 
-        with open('doc_classifier_model.pkl', 'rb') as file:
+        with open(os.path.join("ml-model", 'doc_classifier_model.pkl'), 'rb') as file:
             classifier = pickle.load(file)
 
         predicted_labels = classifier.predict(classify_X_tfidf)
@@ -127,10 +107,10 @@ class ClusterAndClassify:
         for c in unique_classes:
             filtered_rows = cluster_df[cluster_df['cluster_labels'] == c]
             query = f'''
-            You are given a set of documents from the same cluster. Your task is to generate a label for this cluster and determine the sensitivity level based on the following categories: Public Data, Internal Data, Confidential Data, Restricted Data, Private Data, Critical Data, Regulatory Data.
+            You are given a set of documents from the same cluster. Your task is to generate a label for this cluster and determine the sensitivity level based on the following categories: Public Data - 1, Internal Data -2, Confidential Data -3, Restricted Data -4, Private Data - 5, Critical Data - 6, Regulatory Data - 7.
 
             Only output the label name and the sensitivity level, nothing else.
-            Generate one label for the whole c luster and one sensitivity level for the cluster based on the provided categories.
+            Generate one label for the whole cluster and one sensitivity level for the cluster as a number based on the provided categories.
             Here is the data from the cluster:
             {filtered_rows['data']}
             '''
