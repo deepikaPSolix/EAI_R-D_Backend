@@ -1,16 +1,13 @@
 from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 import os
-
 from chroma_db import ChromaDB
 from cluster_classify import ClusterAndClassify
 from attribute_extractor import AttributeExtractor
 from doc_file import DocFile
 import pandas as pd
 from celery import Celery
-from celery.result import AsyncResult
-import redis
-
+from chromadb.errors import NotFoundError
 from rag import RAG
 
 app = Flask(__name__)
@@ -42,13 +39,10 @@ def process_files(files):
     # Extract attributes
     attr_ext = AttributeExtractor()
     attr_res = attr_ext.extract_from_files(parsed_files)
-    # labels.to_csv('labels.csv', index=False)
-    # attr_res.to_csv('attr.csv', index=False)
 
     result = pd.merge(labels, attr_res, on='file_name', how='left') 
     result['attributes'] = result[attr_res.columns.difference(['file_name'])].apply(lambda row: row.to_json(), axis=1)
     result = result[['file_name', 'data', 'label','sensitivity', 'attributes']]
-    # result.to_csv('result.csv', index=False)
 
     cdb = ChromaDB()
     cdb.add_documents(result)
@@ -61,29 +55,32 @@ def home():
     return "<p>Welcome to EAI!!!</p>"
 
 
-@app.route("/uploadandtrain", methods=['POST'])
+@app.route("/docs/uploadandtrain", methods=['POST'])
 def cluster_and_classify():
-    if 'files' not in request.files:
-        return jsonify({"error": "No files provided"}), 400
-    
-    files = request.files.getlist('files')
-    saved_files = []
+    try:
+        if 'files' not in request.files:
+            return jsonify({"error": "No files provided"}), 400
+        
+        files = request.files.getlist('files')
+        saved_files = []
 
-    for file in files:
-        if file.filename == '':
-            return jsonify({"error": "Empty filename"}), 400
+        for file in files:
+            if file.filename == '':
+                return jsonify({"error": "Empty filename"}), 400
 
-        # Save each file to the upload folder
-        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
-        file.save(file_path)
-        print("Filename: ", file.filename)
-        saved_files.append(file_path)
+            # Save each file to the upload folder
+            file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+            file.save(file_path)
+            print("Filename: ", file.filename)
+            saved_files.append(file_path)
 
-    task = process_files.delay(saved_files)
+        task = process_files.delay(saved_files)
 
-    return jsonify({"status": "processing", "task_id": task.id}), 202
+        return jsonify({"status": "processing", "task_id": task.id}), 202
+    except Exception as e:
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
-@app.route("/classify", methods=['POST'])
+@app.route("/docs/classify", methods=['POST'])
 def classify():
     if 'files' not in request.files:
         return jsonify({"error": "No files provided"}), 400
@@ -108,15 +105,18 @@ def classify():
     return jsonify({"labels": labels.to_json(orient='records')}), 201
 
 
-@app.route('/query_rag')
+@app.route('/rag/query')
 def query_rag():
-    query = request.args.get('query', None)
-    access_level = request.args.get('access_level', 1)
+    try:
+        query = request.args.get('query', None)
+        access_level = request.args.get('access_level', 1)
 
-    rag = RAG(ChromaDB())
-    res = rag.process_user_query(query, access_level)
+        rag = RAG(ChromaDB())
+        res = rag.process_user_query(query, access_level)
 
-    return jsonify({"response": res})
+        return jsonify({"response": res})
+    except Exception as e:
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 @app.route('/status/<task_id>')
 def get_status(task_id):
@@ -128,9 +128,38 @@ def get_status(task_id):
     else:
         return jsonify({"state": task.state})
 
-# @app.route("/retrain", methods=['POST'])
-# def cluster_and_classify():
-#     return "Query result"
+
+@app.route('/docs', methods = ["GET"])
+def fetch_files():
+    try:
+        db = ChromaDB()
+        res = db.get()
+
+        if not res:
+            raise NotFoundError("Could not fetch documents.")
+
+        return jsonify(res)
+    except NotFoundError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+
+@app.route('/docs', methods=['PATCH'])
+def update_files():
+    try:
+        data = request.get_json()
+
+        # Check if data is not None (i.e., the JSON body was valid)
+        if data is None:
+            raise ValueError("Missing data in the request body")
+        db = ChromaDB()
+        db.update_documents([data])
+        return jsonify({'status': "success"})
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 
 

@@ -1,5 +1,6 @@
 import chromadb
 import uuid
+import json
 
 class ChromaDB:
 
@@ -44,31 +45,48 @@ class ChromaDB:
     
     def update_documents(self, data_dict):
         for ele in data_dict:
-            doc_name = ele['file_name']
-            doc_data = ele['data']
+            doc_id = ele['id']
             doc_label = ele['label']
             doc_sensitivity = ele['sensitivity']
             doc_attributes = ele['attributes']
         
-            self.collection.upsert(
-                    documents= [doc_data],
-                    ids= [doc_name],
+            self.collection.update(
+                    ids= [doc_id],
                     metadatas= [
                         {
                             'label':doc_label,
                             'sensitivity':doc_sensitivity,
-                            'attributes':doc_attributes
+                            'attributes':str(doc_attributes)
                         }
                             ]
                     )
         print('Documents updated succesfully')
+
+    def get(self, ids = None, where = None):
+        result = self.collection.get(
+            ids = ids if ids else None,
+            where = where if where else None
+        )
+        data = []
+        n = len(result['ids'])
+        for ele in range(n):
+            data_dict = {
+                'id': result['ids'][ele],
+                'file_name' : result['metadatas'][ele]['file_name'],
+                'data' : result['documents'][ele],
+                'label' : result['metadatas'][ele]['label'],
+                'sensitivity' : result['metadatas'][ele]['sensitivity'],
+                'attributes' : json.loads(result['metadatas'][ele]['attributes'])
+            }
+            data.append(data_dict)
+        return data
     
 
     def query_db(self, query_text, user_role, k = 20):
         result = self.collection.query(
             query_texts=[query_text], 
             n_results=k,
-            where = {'sensitivity':{'$lte' : int(user_role)}}
+            # where = {'sensitivity':{'$lte' : int(user_role)}}
             )
         
         data = []
