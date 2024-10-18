@@ -59,7 +59,7 @@ def process_files(files):
     attr_res = attr_ext.extract_from_files(parsed_files)
 
     result = pd.merge(labels, attr_res, on='file_name', how='left') 
-    result['attributes'] = result[attr_res.columns.difference(['file_name'])].apply(lambda row: row.to_json(), axis=1)
+    result['attributes'] = result[attr_res.columns.difference(['file_name'])].apply(lambda row: row.to_dict(), axis=1)
     result = result[['file_name', 'data', 'label','sensitivity', 'attributes']]
 
     cdb = ChromaDB()
@@ -155,7 +155,6 @@ def fetch_files():
     try:
         db = ChromaDB()
         res = db.get()
-
         if not res:
             raise NotFoundError("Could not fetch documents.")
 
@@ -169,13 +168,12 @@ def fetch_files():
 def update_files():
     try:
         data = request.get_json()
-
         # Check if data is not None (i.e., the JSON body was valid)
         if data is None:
             raise ValueError("Missing data in the request body")
         db = ChromaDB()
-        db.update_documents([data])
-        return jsonify({'status': "success"})
+        res = db.update_documents(data)
+        return jsonify({'status': res})
 
     except ValueError as e:
         return jsonify({"error": str(e)}), 400

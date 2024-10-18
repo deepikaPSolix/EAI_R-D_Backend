@@ -36,7 +36,7 @@ class ChromaDB:
                             {
                                 'label':doc_label,
                                 'sensitivity':doc_sensitivity,
-                                'attributes':doc_attributes,
+                                'attributes':json.dumps(doc_attributes),
                                 'file_name': doc_name
                             }
                                 ]
@@ -48,23 +48,15 @@ class ChromaDB:
 
     
     def update_documents(self, data_dict):
+        ids = [d['id'] for d in data_dict]
+        documents = [d['data'] for d in data_dict]
+        metadatas = [{'label':d['label'], 'sensitivity': d['sensitivity'], 'attributes':json.dumps(d['attributes'])} for d in data_dict]
         try:
-            for ele in data_dict:
-                doc_id = ele['id']
-                doc_label = ele['label']
-                doc_sensitivity = ele['sensitivity']
-                doc_attributes = ele['attributes']
-            
-                self.collection.update(
-                        ids= [doc_id],
-                        metadatas= [
-                            {
-                                'label':doc_label,
-                                'sensitivity':doc_sensitivity,
-                                'attributes':str(doc_attributes)
-                            }
-                                ]
-                        )
+            res = self.collection.upsert(
+                ids = ids,
+                documents=documents,
+                metadatas = metadatas
+            )
             return True
         except Exception as e:
             print("[update_documents] Exception - " + str(e))
@@ -76,6 +68,7 @@ class ChromaDB:
                 ids = ids if ids else None,
                 where = where if where else None
             )
+            print(result)
             data = []
             n = len(result['ids'])
             for ele in range(n):
@@ -90,6 +83,7 @@ class ChromaDB:
                 data.append(data_dict)
             return data
         except Exception as e:
+            print("[get] Exception - " + str(e))
             raise("[get] Exception - " + str(e))
     
 
@@ -104,7 +98,6 @@ class ChromaDB:
             data = []
             n = len(result['ids'][0])
             for ele in range(n):
-                # print(ele)
                 data_dict = {
                     'file_name' : result['metadatas'][0][ele]['file_name'],
                     'data' : result['documents'][0][ele],
