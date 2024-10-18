@@ -38,11 +38,13 @@ class RAG:
             If the query involves data beyond the user's access level, return only: "You are not authorized to access this information."
             Please dont give me extra information. just the response or return only "You are not authorized to access this information."
         """
-        response = self.model.invoke(f"""
+
+        curated_query = f"""
             Query: {query}
             Context: {filtered_file_data}
 
             Follow these instructions strictly:
             {access_instructions}
-        """)
-        return response.content
+        """
+        response = self.model.invoke(curated_query)
+        return (response.content, curated_query)

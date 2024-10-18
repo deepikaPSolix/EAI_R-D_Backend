@@ -1,2 +1,6 @@
 .env
 __pycache__
+chromadb
+uploads
+ml-model
+chroma.log

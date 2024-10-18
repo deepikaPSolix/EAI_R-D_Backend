@@ -15,15 +15,33 @@ load_dotenv()
 
 
 # Configure Celery
-app.config['CELERY_BROKER_URL'] = 'redis://localhost:6380/0'
-app.config['CELERY_RESULT_BACKEND'] = 'redis://localhost:6380/0'
+app.config['CELERY_BROKER_URL'] = 'redis://localhost:6379/0'
+app.config['CELERY_RESULT_BACKEND'] = 'redis://localhost:6379/0'
 celery = Celery(app.name, broker=app.config['CELERY_BROKER_URL'], backend=app.config['CELERY_RESULT_BACKEND'])
 
 
 # Ensure the folder for saving uploaded files exists
 UPLOAD_FOLDER = 'uploads'
+ML_FOLDER = 'ml-model'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+if not os.path.exists(ML_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+
+def delete_files_in_directory(directory_path):
+    try:
+        # Loop through all items in the directory
+        for item in os.listdir(directory_path):
+            # Create full path
+            item_path = os.path.join(directory_path, item)
+            
+            # Check if it's a file (not a directory)
+            if os.path.isfile(item_path):
+                os.remove(item_path)
+                print(f"Deleted: {item_path}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
 
 
 # Heavy processing task
@@ -45,7 +63,9 @@ def process_files(files):
     result = result[['file_name', 'data', 'label','sensitivity', 'attributes']]
 
     cdb = ChromaDB()
-    cdb.add_documents(result)
+    res = cdb.add_documents(result)
+    if res:
+        delete_files_in_directory(UPLOAD_FOLDER)
 
     return "Added documents to chromadb!"
 
@@ -105,16 +125,17 @@ def classify():
     return jsonify({"labels": labels.to_json(orient='records')}), 201
 
 
-@app.route('/rag/query')
+@app.route('/rag/query', methods=["POST"])
 def query_rag():
     try:
-        query = request.args.get('query', None)
-        access_level = request.args.get('access_level', 1)
+        data = request.get_json()
+        if data is None:
+            raise ValueError("Missing data in the request body")
 
         rag = RAG(ChromaDB())
-        res = rag.process_user_query(query, access_level)
+        res = rag.process_user_query(data['query'], data["access_level"])
 
-        return jsonify({"response": res})
+        return jsonify({"response": res[0], "curated_query": res[1]})
     except Exception as e:
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
