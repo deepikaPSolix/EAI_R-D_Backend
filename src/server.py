@@ -26,7 +26,7 @@ ML_FOLDER = 'ml-model'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
 if not os.path.exists(ML_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+    os.makedirs(ML_FOLDER)
 
 
 def delete_files_in_directory(directory_path):
