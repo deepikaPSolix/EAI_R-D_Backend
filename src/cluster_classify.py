@@ -108,8 +108,9 @@ class ClusterAndClassify:
             filtered_rows = cluster_df[cluster_df['cluster_labels'] == c]
             query = f'''
             You are given a set of documents from the same cluster. Your task is to generate a label for this cluster and determine the sensitivity level based on the following categories: Public Data - 1, Internal Data -2, Confidential Data -3, Restricted Data -4, Private Data - 5, Critical Data - 6, Regulatory Data - 7.
+            Also determine the retention time for the data based on the type of data in the document. Give a specific time frame in years and months.
 
-            Only output the label name and the sensitivity level, nothing else.
+            Only output the label name, the sensitivity level and retention time, nothing else.
             Generate one label for the whole cluster and one sensitivity level for the cluster as a number based on the provided categories.
             Here is the data from the cluster:
             {filtered_rows['data']}
@@ -117,6 +118,7 @@ class ClusterAndClassify:
             q_res = model.infer_model(query, LabelGovernanceModel)
             filtered_rows['label'] = q_res.label
             filtered_rows['sensitivity'] = q_res.sensitivity
+            filtered_rows['retention_time'] = q_res.retention_time
             res.append(filtered_rows)
 
         return pd.concat(res, ignore_index=True)
