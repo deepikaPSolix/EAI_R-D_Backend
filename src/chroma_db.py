@@ -36,9 +36,10 @@ class ChromaDB:
                             {
                                 'label':doc_label,
                                 'sensitivity':doc_sensitivity,
-                                'attributes':json.dumps(doc_attributes),
+                                'reason': row['reason'],
                                 'file_name': doc_name,
-                                'retention_time': row['retention_time']
+                                'retention_time': row['retention_time'],
+                                'attributes':json.dumps(doc_attributes),
                             }
                                 ]
                         )
@@ -79,6 +80,7 @@ class ChromaDB:
                     'data' : result['documents'][ele],
                     'label' : result['metadatas'][ele]['label'],
                     'sensitivity' : result['metadatas'][ele]['sensitivity'],
+                    'reason' : result['metadatas'][ele]['reason'],
                     'retention_time' : result['metadatas'][ele]['retention_time'],
                     'attributes' : json.loads(result['metadatas'][ele]['attributes'])
                 }
