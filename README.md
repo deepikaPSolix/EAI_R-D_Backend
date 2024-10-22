@@ -113,6 +113,53 @@ The `AttributeExtractor` class is responsible for extracting specific attributes
 
 ---
 
+## **5. ChromaDB Class Documentation**
+
+### **Overview**
+The `ChromaDB` class is a singleton class that provides an interface to interact with a Chroma database. It allows for document storage, retrieval, updating, and querying of data. It uses `chromadb`'s persistent client to maintain the collection of documents, each with its associated metadata, and provides functionality for upserting and querying documents based on specified conditions like sensitivity.
+
+### **Class Structure**
+
+1. **`__new__(cls, *args, **kwargs)`**
+   - **Purpose:** Implements the singleton pattern, ensuring that only one instance of `ChromaDB` is created. If an instance already exists, it returns the existing one.
+   - **Returns:** The instance of `ChromaDB`.
+
+### **Methods**
+
+#### **1. `create_collection(self, name='documents')`**
+   - **Purpose:** Creates a new document collection in ChromaDB or retrieves an existing collection with the given name.
+   - **Parameters:**
+     - `name (str)`: Name of the collection (default is 'documents').
+   - **Returns:** The created or retrieved collection.
+
+#### **2. `add_documents(self, data_df)`**
+   - **Purpose:** Adds new documents to the ChromaDB collection. The method iterates over rows in a DataFrame and inserts document data, assigning unique IDs to each document.
+   - **Parameters:**
+     - `data_df (pandas.DataFrame)`: A DataFrame containing document information, including fields such as `file_name`, `data`, `label`, `sensitivity`, and `attributes`.
+   - **Returns:** `True` if the operation is successful, otherwise `False`.
+
+#### **3. `update_documents(self, data_dict)`**
+   - **Purpose:** Updates existing documents in the collection with new data. The method takes a dictionary of document data and updates the corresponding document entries in ChromaDB based on their IDs.
+   - **Parameters:**
+     - `data_dict (list of dict)`: A list of dictionaries where each dictionary contains updated data for a document (including its ID).
+   - **Returns:** `True` if the update is successful, otherwise `False`.
+
+#### **4. `get(self, ids=None, where=None)`**
+   - **Purpose:** Retrieves documents from the collection based on provided document IDs or query conditions (via the `where` parameter). If no parameters are provided, all documents are retrieved.
+   - **Parameters:**
+     - `ids (list)`: A list of document IDs to retrieve (optional).
+     - `where (dict)`: A dictionary specifying conditions for document retrieval (optional).
+   - **Returns:** A list of document data.
+
+#### **5. `query_db(self, query_text, user_role, k=20)`**
+   - **Purpose:** Queries the ChromaDB collection based on the provided query text. Results are filtered by the user's role and sensitivity level, ensuring that the user only retrieves documents with sensitivity equal to or lower than their access level.
+   - **Parameters:**
+     - `query_text (str)`: The search query text.
+     - `user_role (int)`: The user's sensitivity level (used to filter query results).
+     - `k (int)`: The number of results to return (default is 20).
+   - **Returns:** A list of document data that matches the query.
+---
+
 ### **Dependencies**
 - **Libraries:**
   - `pandas`: Used for DataFrame operations and structured data handling.
