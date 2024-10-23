@@ -78,10 +78,10 @@ def home():
 @app.route("/docs/uploadandtrain", methods=['POST'])
 def cluster_and_classify():
     try:
-        if 'files' not in request.files:
+        if 'files[]' not in request.files:
             return jsonify({"error": "No files provided"}), 400
         
-        files = request.files.getlist('files')
+        files = request.files.getlist('files[]')
         saved_files = []
 
         for file in files:
