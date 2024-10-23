@@ -1,10 +1,12 @@
 import os
 from unstructured.partition.auto import partition
 from unstructured.chunking.basic import chunk_elements
+from pathlib import Path
 
 class DocFile:
     def __init__(self, file_path: str):
         self.file_name = os.path.basename(file_path)
+        self.file_type = Path(self.file_name).suffix[1:]
         self.chunks = self._extract_data_chunks(file_path)
         self.data = " | ".join([chunk.text for chunk in self.chunks])
         

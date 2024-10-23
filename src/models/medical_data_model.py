@@ -24,4 +24,4 @@ class ExtractedData(BaseModel):
     retina_iris_scans: List[str] = Field(default_factory=list, description="Biometric data used for identification based on eye patterns.")
     date_of_birth: str = Field(default_factory="", description="The date on which a person was born.")
     place_of_birth: str = Field(default_factory="", description="The location where a person was born.")
-    file_name: str = Field(default_factory="", description="The name of the file.")
+    company_name:str = Field(default= "", description="The name of the company or organization that the document belongs to.")

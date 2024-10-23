@@ -53,19 +53,19 @@ def process_files(files):
     cc = ClusterAndClassify()
     cc_res = cc.cluster_classify(data = parsed_files)
     labels = cc.generate_cluster_labels(cc_res)
-
     # Extract attributes
     attr_ext = AttributeExtractor()
     attr_res = attr_ext.extract_from_files(parsed_files)
 
     result = pd.merge(labels, attr_res, on='file_name', how='left') 
     result['attributes'] = result[attr_res.columns.difference(['file_name'])].apply(lambda row: row.to_dict(), axis=1)
-    result = result[['file_name', 'data', 'label','sensitivity', 'attributes']]
-
+    result = result[['file_name', 'data', 'label','sensitivity', 'reason', 'retention_time', 'attributes']]
     cdb = ChromaDB()
     res = cdb.add_documents(result)
     if res:
         delete_files_in_directory(UPLOAD_FOLDER)
+    delete_files_in_directory(UPLOAD_FOLDER)
+
 
     return "Added documents to chromadb!"
 
@@ -78,10 +78,10 @@ def home():
 @app.route("/docs/uploadandtrain", methods=['POST'])
 def cluster_and_classify():
     try:
-        if 'files' not in request.files:
+        if 'files[]' not in request.files:
             return jsonify({"error": "No files provided"}), 400
         
-        files = request.files.getlist('files')
+        files = request.files.getlist('files[]')
         saved_files = []
 
         for file in files:
@@ -155,8 +155,6 @@ def fetch_files():
     try:
         db = ChromaDB()
         res = db.get()
-        if not res:
-            raise NotFoundError("Could not fetch documents.")
 
         return jsonify(res)
     except NotFoundError as e:

@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from doc_file import DocFile
 from llm_model import LLMModel
-from models.label_governance_model import LabelGovernanceModel
+from models.label_governance_model import GovernanceModel
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
@@ -106,18 +106,31 @@ class ClusterAndClassify:
         res = []
         for c in unique_classes:
             filtered_rows = cluster_df[cluster_df['cluster_labels'] == c]
+            rows = []
+            for row in filtered_rows.itertuples():
+                rows.append(f'file_name: {row.file_name}, data: {row.data}')
             query = f'''
-            You are given a set of documents from the same cluster. Your task is to generate a label for this cluster and determine the sensitivity level based on the following categories: Public Data - 1, Internal Data -2, Confidential Data -3, Restricted Data -4, Private Data - 5, Critical Data - 6, Regulatory Data - 7.
+            You are provided with a set of documents from a cluster. Complete the following tasks:
 
-            Only output the label name and the sensitivity level, nothing else.
-            Generate one label for the whole cluster and one sensitivity level for the cluster as a number based on the provided categories.
-            Here is the data from the cluster:
-            {filtered_rows['data']}
+            1. Generate a label for this cluster. The label must be relevant and very specific to the data in the cluster.
+            2. For each document, assign a sensitivity level based on these categories:
+            - Public Data: 1, Internal Data: 2, Confidential Data: 3, Restricted Data: 4, Private Data: 5, Critical Data: 6, Regulatory Data: 7.
+            - Explicitly analyze each document to assign sensitivity individually.
+            3. Provide a reason for each document's sensitivity classification mentioning the data points responsible for the sensitivity.
+            4. Determine the retention period for each document based on its type. Provide a specific time frame in years and months.
+
+            Only return the output in the requested JSON format. No extra information.
+
+            Cluster Data:  
+            {rows}
             '''
-            q_res = model.infer_model(query, LabelGovernanceModel)
-            filtered_rows['label'] = q_res.label
-            filtered_rows['sensitivity'] = q_res.sensitivity
-            res.append(filtered_rows)
+            q_res = model.infer_model(query, GovernanceModel)
+            print("QRES")
+            print(q_res.dict())
+            res_dict = q_res.dict()
+            df = pd.DataFrame(res_dict['attributes'])
+            result = pd.merge(filtered_rows, df, on='file_name', how='left') 
+            res.append(result)
 
         return pd.concat(res, ignore_index=True)
 

@@ -13,7 +13,7 @@ class AttributeExtractor:
         res = []
         for file in files:
             data = self.extract_data_from_chunks(file.chunks)
-            combined_data = self.combine_data(data, file.file_name)
+            combined_data = self.combine_data(data, file.file_name, file.file_type)
             res.append(combined_data)
         return pd.DataFrame(res)
 
@@ -40,10 +40,11 @@ class AttributeExtractor:
 
         return res
 
-    def combine_data(self, data, file_name):
+    def combine_data(self, data, file_name, file_type):
         rows = [item.dict() for item in data]
         combined_data = self._merge_json_objects(rows)
         combined_data['file_name'] = file_name
+        combined_data['file_type'] = file_type
         return combined_data
 
     def _merge_json_objects(self, json_objects: dict):
