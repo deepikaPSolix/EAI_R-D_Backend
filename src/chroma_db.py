@@ -70,10 +70,11 @@ class ChromaDB:
                 ids = ids if ids else None,
                 where = where if where else None
             )
-            print(result)
             data = []
             n = len(result['ids'])
             for ele in range(n):
+                if not result['metadatas'][ele]['label']:
+                    print("NO LABEL: " + result['metadatas'][ele]['file_name'])
                 data_dict = {
                     'id': result['ids'][ele],
                     'file_name' : result['metadatas'][ele]['file_name'],
@@ -87,8 +88,8 @@ class ChromaDB:
                 data.append(data_dict)
             return data
         except Exception as e:
-            print("[get] Exception - " + str(e))
-            raise("[get] Exception - " + str(e))
+            print("[get] Exception - " + str(e) + str(ele))
+
     
 
     def query_db(self, query_text, user_role, k = 20):

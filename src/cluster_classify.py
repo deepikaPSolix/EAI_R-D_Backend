@@ -110,19 +110,31 @@ class ClusterAndClassify:
             for row in filtered_rows.itertuples():
                 rows.append(f'file_name: {row.file_name}, data: {row.data}')
             query = f'''
-            You are provided with a set of documents from a cluster. Complete the following tasks:
+            Task: Cluster Document Analysis
 
-            1. Generate a label for this cluster. The label must be relevant and very specific to the data in the cluster.
-            2. For each document, assign a sensitivity level based on these categories:
-            - Public Data: 1, Internal Data: 2, Confidential Data: 3, Restricted Data: 4, Private Data: 5, Critical Data: 6, Regulatory Data: 7.
-            - Explicitly analyze each document to assign sensitivity individually.
-            3. Provide a reason for each document's sensitivity classification mentioning the data points responsible for the sensitivity.
-            4. Determine the retention period for each document based on its type. Provide a specific time frame in years and months.
+You are provided with a set of documents in a cluster. Perform the following tasks accurately:
 
-            Only return the output in the requested JSON format. No extra information.
+1. Cluster Labeling: Generate a specific and accurate label that reflects the content of the entire cluster. Only return the cluster name and nothing else.
 
-            Cluster Data:  
-            {rows}
+2. Sensitivity Classification: For each document, assign a sensitivity level as an integer from the following categories:
+   - 1: Public Data (General public access, e.g., reports, statistics)
+   - 2: Internal Data (Operational documents for internal use)
+   - 3: Confidential Data (Personal/sensitive data shared on a need-to-know basis)
+   - 4: Restricted Data (Highly sensitive information, access limited to specific personnel)
+   - 5: Private Data (Detailed personal records, protected by privacy laws)
+   - 6: Critical Data (Vital for urgent care or life-saving decisions)
+   - 7: Regulatory Data (Compliance with legal/regulatory requirements)
+
+   Carefully analyze any document containing PII, trade secrets, legal, medical, or intellectual property. These should be classified as level 3 or higher. Ensure critical or regulatory data is assigned levels 6 or 7.
+
+3. List the attributes that are found in the data that justify the sensitivity level. Only give the list in the form CSV values and nothing else.
+
+4. Retention Period: Assign the appropriate retention period for each document based on its type, specifying the time in years and months.
+
+Return the output strictly in the requested JSON format, without additional information.
+
+Cluster Data:
+{rows}
             '''
             q_res = model.infer_model(query, GovernanceModel)
             print("QRES")
