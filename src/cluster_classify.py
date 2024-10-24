@@ -112,29 +112,71 @@ class ClusterAndClassify:
             query = f'''
             Task: Cluster Document Analysis
 
-You are provided with a set of documents in a cluster. Perform the following tasks accurately:
+            You are provided with a set of documents in a cluster. Perform the following tasks accurately:
 
-1. Cluster Labeling: Generate a specific and accurate label that reflects the content of the entire cluster. Only return the cluster name and nothing else.
+            1. **Cluster Labeling**: Generate a clear and specific label that accurately represents the cluster. Return only the cluster name.
 
-2. Sensitivity Classification: For each document, assign a sensitivity level as an integer from the following categories:
-   - 1: Public Data (General public access, e.g., reports, statistics)
-   - 2: Internal Data (Operational documents for internal use)
-   - 3: Confidential Data (Personal/sensitive data shared on a need-to-know basis)
-   - 4: Restricted Data (Highly sensitive information, access limited to specific personnel)
-   - 5: Private Data (Detailed personal records, protected by privacy laws)
-   - 6: Critical Data (Vital for urgent care or life-saving decisions)
-   - 7: Regulatory Data (Compliance with legal/regulatory requirements)
+            2. **Sensitivity Classification**: For each document, assign a sensitivity level (integer) based on the following categories:
+            - 1: Public Data (e.g., public reports, statistics)
+            - 2: Internal Data (internal use, not for external sharing)
+            - 3: Confidential Data (personal or sensitive information)
+            - 4: Restricted Data (highly sensitive, access limited)
+            - 5: Private Data (personal data protected by privacy laws)
+            - 6: Critical Data (vital for urgent care or life-saving actions)
+            - 7: Regulatory Data (compliance with legal/regulatory rules)
 
-   Carefully analyze any document containing PII, trade secrets, legal, medical, or intellectual property. These should be classified as level 3 or higher. Ensure critical or regulatory data is assigned levels 6 or 7.
+            Ensure documents containing PII, trade secrets, legal, medical, or intellectual property are classified as level 3 or higher. Assign levels 6 or 7 for critical or regulatory data.
 
-3. List the attributes that are found in the data that justify the sensitivity level. Only give the list in the form CSV values and nothing else.
+            3. **Top Data Types**: Analyze the document and identify 3 to 5 **distinct** and meaningful data types that justify the sensitivity classification. Do not rely on the example data types provided below—these are only for reference. The identified data types must be directly related to the actual content of the document. Return these data types in CSV format. The data types should be relevant to the document's content, and similar types must not be repeated.
 
-4. Retention Period: Assign the appropriate retention period for each document based on its type, specifying the time in years and months.
+            Reference examples (for understanding only, do not use as output unless relevant):
+                - PII
+                - PHI
+                - EHR Data
+                - Medical History
+                - Lab Results
+                - Prescription Data
+                - Patient Satisfaction Surveys
+                - Appointment Records
+                - Demographic Information
+                - Contact Information
+                - Health Insurance Details
+                - Caregiver Information
+                - Clinical Trial Data
+                - Adverse Event Reports
+                - Imaging Data
+                - Genetic Information
+                - Diagnosis Codes (ICD-10)
+                - Treatment Protocols
+                - Medical Devices Information
+                - Immunization Records
+                - Clinical Notes
+                - Anonymized Clinical Notes
+                - Research Findings
+                - Billing Information
+                - Insurance Claims Data
+                - Compliance Reports
+                - Audit Trails
+                - Internal Policies
+                - Staff Scheduling Information
+                - Facility Management Data
+                - Equipment Inventory
+                - Financial Reports
+                - Strategic Plans
+                - Billing Disputes
+                - Operational Efficiency Metrics
+                - Staffing Levels
+                - Risk Management Reports
 
-Return the output strictly in the requested JSON format, without additional information.
 
-Cluster Data:
-{rows}
+            4. **Data Points**: Provide up to 5 key-value pairs in dictionary format that contribute to the sensitivity level. Use this format: {{"name1": "value1", "name2": "value2"}}.
+
+            5. **Retention Period**: Assign a retention period for each document based on its type, specifying the time in years and months.
+
+            Return the output strictly in the required JSON format, without any additional information.
+
+            Cluster Data:
+            {rows}
             '''
             q_res = model.infer_model(query, GovernanceModel)
             print("QRES")

@@ -60,7 +60,7 @@ def process_files(files):
 
     result = pd.merge(labels, attr_res, on='file_name', how='left') 
     result['attributes'] = result[attr_res.columns.difference(['file_name'])].apply(lambda row: row.to_dict(), axis=1)
-    result = result[['file_name', 'data', 'label','sensitivity', 'reason', 'retention_time', 'attributes']]
+    result = result[['file_name', 'data', 'label','sensitivity', 'data_classifiers', 'responsible_values', 'retention_time', 'attributes']]
     result.to_csv('result.csv')
     cdb = ChromaDB()
     res = cdb.add_documents(result)
