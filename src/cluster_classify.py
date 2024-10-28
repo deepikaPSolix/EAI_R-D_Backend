@@ -169,9 +169,11 @@ class ClusterAndClassify:
                 - Risk Management Reports
 
 
-            4. **Data Points**: Provide up to 5 key-value pairs in dictionary format that contribute to the sensitivity level. Use this format: {{"name1": "value1", "name2": "value2"}}.
+            4. **Data Points**: Provide up to 10 key that contribute to the sensitivity level. Use this format: name1, name2, name3.
 
             5. **Retention Period**: Assign a retention period for each document based on its type, specifying the time in years and months.
+
+            6. Do not group files toghether. Generate output for each file.
 
             Return the output strictly in the required JSON format, without any additional information.
 
@@ -179,7 +181,7 @@ class ClusterAndClassify:
             {rows}
             '''
             q_res = model.infer_model(query, GovernanceModel)
-            print("QRES")
+            print("QRES: " + str(c))
             print(q_res.dict())
             res_dict = q_res.dict()
             df = pd.DataFrame(res_dict['attributes'])

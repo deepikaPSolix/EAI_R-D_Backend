@@ -8,6 +8,10 @@ RUN apt-get update && \
     apt-get -qq install -y --no-install-recommends \
     poppler-utils \
     tesseract-ocr \
+    libmagic-dev \
+    libreoffice \
+    pandoc \
+    libgl1 \
     libmagic1 && \
     rm -rf /var/lib/apt/lists/*  # Clean up APT when done to reduce image size
 

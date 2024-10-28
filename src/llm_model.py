@@ -10,11 +10,6 @@ class LLMModel:
         self._initialize_model()
 
     def _initialize_model(self):
-        rate_limiter = InMemoryRateLimiter(
-            requests_per_second=1.0,  # <-- Super slow! We can only make a request once every 10 seconds!!
-            check_every_n_seconds=0.1,  # Wake up every 100 ms to check whether allowed to make a request,
-            max_bucket_size=10,  # Controls the maximum burst size.
-        )
         model = ChatTogether(temperature=0.1)
         self.model = model
 
