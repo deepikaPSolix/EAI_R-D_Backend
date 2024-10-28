@@ -137,7 +137,7 @@ def query_rag():
         rag = RAG(ChromaDB())
         res = rag.process_user_query(data['query'], data["access_level"])
 
-        return jsonify({"response": res[0], "curated_query": res[1]})
+        return jsonify({"response": res[0], "curated_query": res[1], "files": res[2]})
     except Exception as e:
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 

@@ -180,7 +180,7 @@ class ClusterAndClassify:
             '''
             q_res = model.infer_model(query, GovernanceModel)
             print("QRES")
-            print(q_res.dict())
+            print(q_res)
             res_dict = q_res.dict()
             df = pd.DataFrame(res_dict['attributes'])
             result = pd.merge(filtered_rows, df, on='file_name', how='left') 

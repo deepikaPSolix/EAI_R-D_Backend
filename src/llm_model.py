@@ -15,7 +15,7 @@ class LLMModel:
             check_every_n_seconds=0.1,  # Wake up every 100 ms to check whether allowed to make a request,
             max_bucket_size=10,  # Controls the maximum burst size.
         )
-        model = ChatTogether(temperature=0.1)
+        model = ChatTogether(temperature=0.1, api_key = 'b969a2d50bfe820d89a8e0bba29ea6a117483809157b5d989e4c61a65ada3c65')
         self.model = model
 
     def infer_model(self, query, data_model):
