@@ -105,7 +105,7 @@ class RAG:
 
         """
         response = self.model.invoke(curated_query)
-        files = self.show_files(response)
+        files = self.show_files(response.content)
         return (response.content, curated_query, files)
     
     def show_files(self, rag_response):
@@ -118,7 +118,6 @@ class RAG:
         Returns:
             list: A list of extracted file names.
         """
-        
         prompt_template = PromptTemplate(
             template="""
             - Extract any file names present in the following text and provide only the JSON list below. 
