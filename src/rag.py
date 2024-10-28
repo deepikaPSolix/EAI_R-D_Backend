@@ -1,5 +1,8 @@
 from chroma_db import ChromaDB
 from llm_model import LLMModel
+from langchain.prompts import PromptTemplate
+from models.extracted_file_names import ExtractedFilesModel
+from langchain.output_parsers import PydanticOutputParser
 import json
 
 
@@ -102,4 +105,44 @@ class RAG:
 
         """
         response = self.model.invoke(curated_query)
-        return (response.content, curated_query)
+        files = self.show_files(response.content)
+        return (response.content, curated_query, files)
+    
+    def show_files(self, rag_response):
+        """
+        Uses LLM to extract a list of file names from a textual RAG response.
+
+        Args:
+            rag_response (str): The RAG response containing a list of files.
+
+        Returns:
+            list: A list of extracted file names.
+        """
+        prompt_template = PromptTemplate(
+            template="""
+            - Extract any file names present in the following text and provide only the JSON list below. 
+            - If no file names are present, return an empty list. 
+            - Do not add any explanation or additional text.
+
+
+            Here is the text:
+            {rag_response}
+
+            Expected output format:
+            {{
+                "files": ["file1.txt", "file2.txt", ...]
+            }}
+            """,
+            input_variables=["rag_response"]
+        )
+
+        output_parser = PydanticOutputParser(pydantic_object=ExtractedFilesModel)
+    
+        chain = prompt_template | self.model | output_parser
+        
+        try:
+            response = chain.invoke({"rag_response": rag_response})
+            return response.files  
+        except Exception as e:
+            print(f"Error while extracting files: {e}")
+            return []
