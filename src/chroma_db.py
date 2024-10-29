@@ -74,17 +74,15 @@ class ChromaDB:
             data = []
             n = len(result['ids'])
             for ele in range(n):
-                if not result['metadatas'][ele]['label']:
-                    print("NO LABEL: " + result['metadatas'][ele]['file_name'])
                 data_dict = {
                     'id': result['ids'][ele],
                     'file_name' : result['metadatas'][ele]['file_name'],
                     'data' : result['documents'][ele],
-                    'label' : result['metadatas'][ele]['label'],
-                    'sensitivity' : result['metadatas'][ele]['sensitivity'],
-                    'data_classifiers': result['metadatas'][ele]['data_classifiers'],
-                    'responsible_values': result['metadatas'][ele]['responsible_values'],
-                    'retention_time' : result['metadatas'][ele]['retention_time'],
+                    'label' : result['metadatas'][ele].get('label', "No Label"),
+                    'sensitivity' : result['metadatas'][ele].get('sensitivity', 0),
+                    'data_classifiers': result['metadatas'][ele].get('data_classifiers', ""),
+                    'responsible_values': result['metadatas'][ele].get('responsible_values', 'None'),
+                    'retention_time' : result['metadatas'][ele].get('retention_time', "None"),
                     'attributes' : json.loads(result['metadatas'][ele]['attributes'])
                 }
                 data.append(data_dict)
