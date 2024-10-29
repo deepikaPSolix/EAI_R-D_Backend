@@ -57,6 +57,7 @@ def process_files(files):
     # Extract attributes
     attr_ext = AttributeExtractor()
     attr_res = attr_ext.extract_from_files(parsed_files)
+    attr_res.fillna('')
 
     result = pd.merge(labels, attr_res, on='file_name', how='left') 
     result['attributes'] = result[attr_res.columns.difference(['file_name'])].apply(lambda row: row.to_dict(), axis=1)

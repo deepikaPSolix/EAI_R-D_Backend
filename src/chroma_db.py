@@ -2,6 +2,8 @@ import chromadb
 import uuid
 import json
 
+from pandas import DataFrame
+
 class ChromaDB:
 
     _instance = None
@@ -20,30 +22,31 @@ class ChromaDB:
         return self.chroma_client.get_or_create_collection(name = name)
 
 
-    def add_documents(self, data_df):
+    def add_documents(self, data_df: DataFrame):
         try:
+            ids = [str(uuid.uuid4()) for _ in range(len(data_df))]
+            documents = data_df['data'].tolist()
+            metadatas = []
             for _,row in data_df.iterrows():
                 doc_name = row['file_name']
                 doc_data = row['data']
                 doc_label = row['label']
                 doc_sensitivity = row['sensitivity']
                 doc_attributes = row['attributes']
+
+                metadatas.append(
+                     {
+                        'label':doc_label,
+                        'sensitivity':doc_sensitivity,
+                        'data_classifiers': row['data_classifiers'],
+                        'responsible_values': row['responsible_values'],
+                        'file_name': doc_name,
+                        'retention_time': row['retention_time'],
+                        'attributes':json.dumps(doc_attributes),
+                    }
+                )
             
-                self.collection.upsert(
-                        documents= [doc_data],
-                        ids= [str(uuid.uuid4())],
-                        metadatas= [
-                            {
-                                'label':doc_label,
-                                'sensitivity':doc_sensitivity,
-                                'data_classifiers': row['data_classifiers'],
-                                'responsible_values': json.dumps(row['responsible_values']),
-                                'file_name': doc_name,
-                                'retention_time': row['retention_time'],
-                                'attributes':json.dumps(doc_attributes),
-                            }
-                                ]
-                        )
+            self.collection.add(documents= documents, ids= ids, metadatas= metadatas)
             return True
         except Exception as e:
             print("[add_documents] Exception - " + str(e))

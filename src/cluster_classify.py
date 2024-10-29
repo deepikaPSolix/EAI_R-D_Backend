@@ -105,7 +105,7 @@ class ClusterAndClassify:
         unique_classes = cluster_df["cluster_labels"].unique()
         res = []
         for c in unique_classes:
-            filtered_rows = cluster_df[cluster_df['cluster_labels'] == c]
+            filtered_rows = cluster_df[cluster_df['cluster_labels'] == c].head(10)
             rows = []
             for row in filtered_rows.itertuples():
                 rows.append(f'file_name: {row.file_name}, data: {row.data}')
@@ -169,7 +169,7 @@ class ClusterAndClassify:
                 - Risk Management Reports
 
 
-            4. **Data Points**: Provide up to 10 key that contribute to the sensitivity level. Use this format: name1, name2, name3.
+            4. **Data Points**: Provide up to 10 key that contribute to the sensitivity level. Use commas to seperate values.
 
             5. **Retention Period**: Assign a retention period for each document based on its type, specifying the time in years and months.
 

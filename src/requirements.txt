@@ -1,5 +1,5 @@
 langchain
-unstructured
+unstructured[all-docs]
 pandas 
 numpy 
 scikit-learn
