@@ -10,18 +10,19 @@ class RAG:
     def __init__(self, chroma_db: ChromaDB):
         self.crm = chroma_db
         self.model = LLMModel().model
+        
+    def query_rewriting(self, query):
+        imp_instructions = f'''
+        Your task is to optimize the given query for semantic search in a vector database.
 
-    def extract_file_data_and_attributes(self, documents):
-        file_data = []
-        file_data_attributes = []
-        sensitivity = []
-        for doc in documents:
-            file_data.append(doc['data'])
-            attributes_dict = json.loads(doc['attributes'])
-            file_data_attributes.append(attributes_dict)
-            sensitivity.append(doc['sensitivity'])
-        return file_data, file_data_attributes,sensitivity
-    
+    - Correct any misspellings or grammatical errors.
+    - Remove unnecessary details, making the query as straightforward as possible.
+    - Do not output any prefix or suffix; just the rewritten query
+        '''
+        response = self.model.invoke(f'''  Query: {query}
+        Instructions: {imp_instructions} ''')
+        curated_query = response.content
+        return curated_query
 
     # def process_user_query(self, query, access_level):
     #     data = self.crm.query_db(query_text= query, user_role = access_level, k= 20)
@@ -51,8 +52,6 @@ class RAG:
 
     def process_user_query(self, query, access_level):
         data_chroma = self.crm.query_db(query_text= query, user_role=access_level, k=40)
-        print(data_chroma[0])
-        # filtered_file_data, sensitivity, filtered_file_name, retention, file_type = self.extract_file_data_and_attributes(data_chroma)
 
         extracted_data = []  #actual file data
         extracted_attributes = [] #attributes of file
@@ -65,46 +64,46 @@ class RAG:
             # Append the file_data to extracted_data list (store the removed data content)
             extracted_data.append(file_data)
 
-            # attributes = doc.pop('attributes', None)
-            # extracted_attributes.append(attributes)
-            
+                        
             # Append the remaining metadata (without 'data' key) to metadata_only list
             metadata_only.append(doc)
             
+            curated_query=self.query_rewriting(query)
         
         # Now 'metadata_only' contains all documents without the 'data' key
         # and 'extracted_data' contains only the file data (content) from those documents.
         
-        
         access_instructions = f"""
-        You are interacting with an administrator who has access level {access_level}. Here are the rules for responding:
+Your task is to respond to the query based solely on the provided  Context Data, adhering strictly to the following guidelines:
 
-        1. **Administrator and above (Access Level 5 and above):**
-            - Can access all file metadata (file name, file type, sensitivity, retention) but **cannot** access actual file data.
-            - Respond fully using only the metadata (e.g., file name, file type, sensitivity, retention) and do **not** include the data
-            or attributes. fields from the file.
-            - Do not provide explanations regarding access control policies or details beyond the metadata.
+1. **Direct Response Requirement**:
+    - For queries requesting specific lists of files **only output the relevant filenames in a simple, numbered list** without 
+    additional explanations or details.
+    - Do not categorize or provide sector-specific headings or elaborations; simply list the filenames matching the query.
 
-        2. **Other Roles (Access Level less than 5):** 
-            - This is not applicable for this screen as it is for administrators only.
-            
-        Always follow these rules strictly:
-        1. Only provide the requested metadata (file name, file type, sensitivity, retention).
-        2. If metadata is restricted, return only: "You are not authorized to access this information."
-        3. Do not include any actual file data or attributes fields from the result.
 
-        Context Data :  {metadata_only}
-        Respond concisely to the following query: {query} """
+2. **Response Guidelines**:
+    - Avoid any additional text or descriptions beyond the list of filenames.
 
-        curated_query = f"""
+3. ***In case there are no files or data you can find relevant to the given query, do not output anything and do not hallucinate***.
 
-        Query: {query}
+**Context Data**: {metadata_only}
 
+**Query**: {curated_query}
+
+The output must only contain the requested response. Do not include any prefix or suffix to the output.
+
+    """
+        
+        response = self.model.invoke(f"""
+
+    Query: {curated_query}
         Follow these instructions strictly:
         {access_instructions}
-
-        """
-        response = self.model.invoke(curated_query)
+        Make sure you me all the response mentioned in the above instructions. Do not miss giving any data.
+        When asked for files in query, just give me the file names and query details.
+      """)
+        
         files = self.show_files(response.content)
         return (response.content, curated_query, files)
     
