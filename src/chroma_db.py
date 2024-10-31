@@ -111,7 +111,11 @@ class ChromaDB:
                     'data' : result['documents'][0][ele],
                     'label' : result['metadatas'][0][ele]['label'],
                     'sensitivity' : result['metadatas'][0][ele]['sensitivity'],
-                    'attributes' : result['metadatas'][0][ele]['attributes']
+                    'data_classifiers' : result['metadatas'][0][ele]['data_classifiers'],
+                    'responsible_values' : result['metadatas'][0][ele]['responsible_values'],
+                    'retention_time' : result['metadatas'][0][ele]['retention_time'],
+                    'attributes' : result['metadatas'][0][ele]['attributes'],
+                    
                 }
                 data.append(data_dict)
             return data
