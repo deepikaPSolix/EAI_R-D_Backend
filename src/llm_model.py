@@ -10,14 +10,14 @@ class LLMModel:
         self._initialize_model()
 
     def _initialize_model(self):
-        model = ChatTogether(temperature=0.1)
+        model = ChatTogether(temperature=0.1, model='meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo')
         self.model = model
 
     def infer_model(self, query, data_model):
         output_parser = PydanticOutputParser(pydantic_object=data_model)
         format_instructions = output_parser.get_format_instructions()
 
-        prompt = PromptTemplate(
+        prompt = PromptTemplate(    
             template="Answer the user query.\n{format_instructions}\n{query}\n",
             input_variables=["query"],
             partial_variables={"format_instructions": format_instructions},
