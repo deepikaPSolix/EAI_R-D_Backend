@@ -5,6 +5,9 @@ from models.extracted_file_names import ExtractedFilesModel
 from langchain.output_parsers import PydanticOutputParser
 import json
 
+from flashrank import Ranker, RerankRequest
+from langchain import hub
+
 
 class RAG:
     def __init__(self, chroma_db: ChromaDB):
@@ -23,6 +26,53 @@ class RAG:
         Instructions: {imp_instructions} ''')
         curated_query = response.content
         return curated_query
+    
+    def rerank_documents(self, initial_docs, query):
+        ranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2", cache_dir="/opt")
+        rerankrequest = RerankRequest(query=query, passages=initial_docs)
+        reranked_docs = ranker.rerank(rerankrequest)
+        return reranked_docs
+    
+    def generate_prompt(self, user_role, curated_query):
+        access_instructions = ""
+        if user_role == "Doctor":
+            access_instructions = f"""
+
+            Query: "{curated_query}"
+
+            1.You are assisting as a Doctor with full access to detailed medical information, including diagnosis, treatment history, medical history, lab results, prescriptions, and imaging.
+            Respond with comprehensive medical information, including specific test values, diagnoses, and any relevant clinical context to support medical decision-making."
+
+            2.do not provide any sensitive patient information, including SSN, bank details, or other personal identifiers, even if requested."
+
+            3.***In case there are no files or data you can find relevant to the given query, do not output anything and do not hallucinate***.
+            """
+            return access_instructions
+
+
+        elif user_role == "Patient":
+            access_instructions = f"""
+
+            Query: "{curated_query}"
+            1. you are assisting a Patient, you have access to patient's personal health summary, recent diagnoses, treatment plans, prescribed medications, and instructions from healthcare providers.
+            2. Avoid technical details or internal doctor discussions.
+            3.***In case there are no files or data you can find relevant to the given query, do not output anything and do not hallucinate***.
+                    """
+            return access_instructions
+
+        elif user_role == "Nurse":
+            access_instructions = f"""
+                Query: "{curated_query}"
+                1.you are assisting a nurse have access to medical records and are focused on monitoring and patient care. Summarize the medical information
+                to assist with patient monitoring and follow-up, without clinical decision-making details, and provide any necessary patient care instructions
+                or next steps.
+                2.Do not provide any sensitive patient information, including SSN, bank details, or other personal identifiers, even if requested.
+                3.***In case there are no files or data you can find relevant to the given query, do not output anything and do not hallucinate***.
+                """
+            return access_instructions
+
+        else:
+            return "Invalid user role."
 
     def process_user_query(self, query, access_level):
         data_chroma = self.crm.query_db(query_text= query, user_role=access_level, k=40)
@@ -67,6 +117,39 @@ class RAG:
         response = self.model.invoke(access_instructions) 
         files = self.show_files(response.content)
         return (response.content, curated_query, files)
+    
+    def process_user_query_screen2(self, query, access_level, user_role):
+    
+        curated_query=self.query_rewriting(query)
+
+        data_chroma = self.crm.query_db(query_text=curated_query, user_role=access_level, k=40)
+        extracted_data = []
+        for doc in data_chroma:
+
+            new_doc = {
+                'text': doc['data'],
+                'file_name': doc['file_name']
+            }
+
+            extracted_data.append(new_doc)
+        # reranked docs is a list, which has list of documents.
+        reranked_docs = rerank_documents( self, extracted_data, query)
+        top_reranked_docs = reranked_docs[:10]
+
+        prompt = generate_prompt(self, user_role, curated_query)
+
+
+        context = f"""
+            Data: {top_reranked_docs}
+            Instruction: {prompt}
+            Please use the above Data and Instruction to answer the question.
+        """
+
+
+        # Invoke the language model with the constructed prompt
+        response = self.model.invoke(context)
+        return response.content
+
     
     def show_files(self, rag_response):
         """

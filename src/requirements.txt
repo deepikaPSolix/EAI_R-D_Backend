@@ -17,3 +17,4 @@ pillow
 celery
 chromadb
 redis
+flashrank
