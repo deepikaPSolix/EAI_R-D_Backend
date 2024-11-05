@@ -141,6 +141,21 @@ def query_rag():
         return jsonify({"response": res[0], "curated_query": res[1], "files": res[2]})
     except Exception as e:
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+
+@app.route('/rag2/query', methods=["POST"])
+def query_rag():
+    try:
+        data = request.get_json()
+        if data is None:
+            raise ValueError("Missing data in the request body")
+
+        rag = RAG(ChromaDB())
+        res = rag.process_user_query_screen2(data['query'], data["access_level"], data["user_role"])
+
+        return jsonify({"response": res})
+    except Exception as e:
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 @app.route('/status/<task_id>')
 def get_status(task_id):
