@@ -144,7 +144,7 @@ def query_rag():
     
 
 @app.route('/rag2/query', methods=["POST"])
-def query_rag():
+def query_rag2():
     try:
         data = request.get_json()
         if data is None:
