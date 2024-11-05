@@ -133,10 +133,10 @@ class RAG:
 
             extracted_data.append(new_doc)
         # reranked docs is a list, which has list of documents.
-        reranked_docs = rerank_documents( self, extracted_data, query)
+        reranked_docs = self.rerank_documents( self, extracted_data, query)
         top_reranked_docs = reranked_docs[:10]
 
-        prompt = generate_prompt(self, user_role, curated_query)
+        prompt = self.generate_prompt(self, user_role, curated_query)
 
 
         context = f"""
