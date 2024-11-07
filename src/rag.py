@@ -39,13 +39,11 @@ class RAG:
             access_instructions = f"""
 
             Query: "{curated_query}"
-
-            1.You are assisting as a Doctor with full access to detailed medical information, including diagnosis, treatment history, medical history, lab results, prescriptions, and imaging.
-            Respond with comprehensive medical information, including specific test values, diagnoses, and any relevant clinical context to support medical decision-making."
-
-            2.do not provide any sensitive patient information, including SSN, bank details, or other personal identifiers, even if requested."
-
-            3.***In case there are no files or data you can find relevant to the given query, do not output anything and do not hallucinate***.
+            
+            1. As a Doctor, you have complete access to all relevant medical details for patient care.
+              Respond with detailed information relevant to the query. Exclude sensitive information such as PII, 
+              financial details unless directly relevant to patient care.
+            
             """
             return access_instructions
 
@@ -53,21 +51,18 @@ class RAG:
         elif user_role == "Patient":
             access_instructions = f"""
 
-            Query: "{curated_query}"
-            1. you are assisting a Patient, you have access to patient's personal health summary, recent diagnoses, treatment plans, prescribed medications, and instructions from healthcare providers.
-            2. Avoid technical details or internal doctor discussions.
-            3.***In case there are no files or data you can find relevant to the given query, do not output anything and do not hallucinate***.
-                    """
+           Query: "{curated_query}"
+            As a Patient, you have access to a summary of relevant personal health information.
+            Respond with simplified information that helps you understand your health status.
+         """
             return access_instructions
 
         elif user_role == "Nurse":
             access_instructions = f"""
                 Query: "{curated_query}"
-                1.you are assisting a nurse have access to medical records and are focused on monitoring and patient care. Summarize the medical information
-                to assist with patient monitoring and follow-up, without clinical decision-making details, and provide any necessary patient care instructions
-                or next steps.
-                2.Do not provide any sensitive patient information, including SSN, bank details, or other personal identifiers, even if requested.
-                3.***In case there are no files or data you can find relevant to the given query, do not output anything and do not hallucinate***.
+                As a Nurse, you are allowed to access a patient's medical records, including recent treatment updates, medication administration records, lab results, and daily care plans. 
+                Your role focuses on assisting with patient care, so the information provided should include practical details like treatment schedules, medication dosages, and patient progress notes. 
+                Exclude sensitive information such as in-depth diagnostic reports or financial details unless directly relevant to patient care.
                 """
             return access_instructions
 
