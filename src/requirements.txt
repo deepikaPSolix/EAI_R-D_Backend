@@ -1,5 +1,5 @@
 langchain
-unstructured[all-docs]
+unstructured
 pandas 
 numpy 
 scikit-learn
@@ -18,3 +18,5 @@ celery
 chromadb
 redis
 flashrank
+torch
+transformers
