@@ -195,6 +195,17 @@ def update_files():
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+@app.route('/docs', methods=['DELETE'])
+def delete_files():
+    try:
+        ChromaDB().delete_all_docs()
+        return jsonify({'status': "Deleted all records."})
+
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 
 

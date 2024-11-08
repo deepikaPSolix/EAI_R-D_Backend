@@ -121,3 +121,10 @@ class ChromaDB:
             return data
         except Exception as e:
             print("[update_documents] Exception - " + str(e))
+
+    def delete_all_docs(self):
+        try:
+            res = self.collection.get()
+            self.collection.delete(ids=res['ids'])
+        except Exception as e:
+            print("[delete_all_docs] Exception - " + str(e))
