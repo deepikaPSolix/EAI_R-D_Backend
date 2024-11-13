@@ -12,6 +12,13 @@ services:
       - redis
     volumes:
       - ./src:/app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   celery-worker:
     build: ./src
@@ -25,6 +32,13 @@ services:
       - redis
     volumes:
       - ./src:/app
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   redis:
     image: "redis"

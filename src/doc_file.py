@@ -4,7 +4,8 @@ from unstructured.partition.text import partition_text
 from unstructured.chunking.basic import chunk_elements
 from pathlib import Path
 import torch
-from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
+import whisper
+# from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, pipeline
 
 class DocFile:
     def __init__(self, file_path: str):
@@ -17,17 +18,13 @@ class DocFile:
         self.data = " | ".join([chunk.text for chunk in self.chunks])
         
     def extract_text_from_audio(self, file_path: str):
-        device = 0 if torch.cuda.is_available() else -1  # Use 0 for GPU, -1 for CPU
-        torch_dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-        pipe = pipeline("automatic-speech-recognition", model="openai/whisper-large-v3-turbo", device = device, torch_dtype=torch_dtype)
-        result = pipe(file_path, return_timestamps=True)
+        print("GPU: ", torch.cuda.is_available())
+        model = whisper.load_model("turbo")
+        result = model.transcribe(file_path)
         text = result['text']
         elements = partition_text(text = text)
         chunks = chunk_elements(elements, overlap=50, max_characters=2000)
         return chunks
-
-
-         
         
     def _extract_data_chunks(self, file_path: str):
         elements = partition(filename=file_path)

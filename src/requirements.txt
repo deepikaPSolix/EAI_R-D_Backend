@@ -3,7 +3,6 @@ unstructured
 pandas 
 numpy 
 scikit-learn
-langchain
 langchain.community
 together
 langchain-together
@@ -19,4 +18,6 @@ chromadb
 redis
 flashrank
 torch
-transformers
+torchvision
+torchaudio
+openai-whisper
