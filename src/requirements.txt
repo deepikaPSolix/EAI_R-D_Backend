@@ -3,11 +3,8 @@ unstructured
 pandas 
 numpy 
 scikit-learn
-langchain.community
-together
 langchain-together
 langchain_core
-pytesseract
 flask
 python-dotenv
 pydantic
