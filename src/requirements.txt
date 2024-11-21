@@ -1,14 +1,10 @@
 langchain
-unstructured[all-docs]
+unstructured
 pandas 
 numpy 
 scikit-learn
-langchain
-langchain.community
-together
 langchain-together
 langchain_core
-pytesseract
 flask
 python-dotenv
 pydantic
@@ -18,3 +14,7 @@ celery
 chromadb
 redis
 flashrank
+torch
+torchvision
+torchaudio
+openai-whisper

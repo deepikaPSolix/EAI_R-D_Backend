@@ -1,5 +1,5 @@
 # Use an official Python runtime as a parent image
-FROM python:3.9-slim
+FROM python:3.12-slim
 
 # Set the working directory in the container
 WORKDIR /app
@@ -12,6 +12,7 @@ RUN apt-get update && \
     libreoffice \
     pandoc \
     libgl1 \
+    ffmpeg \
     libmagic1 && \
     rm -rf /var/lib/apt/lists/*  # Clean up APT when done to reduce image size
 
