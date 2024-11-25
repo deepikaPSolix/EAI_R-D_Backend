@@ -11,7 +11,12 @@ services:
     depends_on:
       - redis
     volumes:
-      - ./src:/app
+      - ./cache:/app/cache
+      - ./cache/ml-model:/app/cache/ml-model
+      - ./cache/uploads:/app/cache/uploads
+      - ./cache/chromadb:/app/cache/chromadb
+      - ./cache/whisper:/root/.cache/whisper
+      - ./cache/chromadb/models:/root/.cache/chroma
     deploy:
       resources:
         reservations:
@@ -31,7 +36,14 @@ services:
     depends_on:
       - redis
     volumes:
-      - ./src:/app
+      - ./cache:/app/cache
+      - ./cache/output:/app/cache/output
+      - ./cache/ml-model:/app/cache/ml-model
+      - ./cache/uploads:/app/cache/uploads
+      - ./cache/chroma/db:/app/cache/chromadb
+      - ./cache/whisper:/root/.cache/whisper
+      - ./cache/chroma/models:/root/.cache/chroma
+
     deploy:
       resources:
         reservations:
