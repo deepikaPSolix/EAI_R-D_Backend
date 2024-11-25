@@ -21,13 +21,8 @@ celery = Celery(app.name, broker=app.config['CELERY_BROKER_URL'], backend=app.co
 
 
 # Ensure the folder for saving uploaded files exists
-UPLOAD_FOLDER = 'uploads'
-ML_FOLDER = 'ml-model'
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-if not os.path.exists(ML_FOLDER):
-    os.makedirs(ML_FOLDER)
-
+UPLOAD_FOLDER = 'cache/uploads'
+ML_FOLDER = 'cache/ml-model'
 
 def delete_files_in_directory(directory_path):
     try:
@@ -53,7 +48,7 @@ def process_files(files):
     cc = ClusterAndClassify()
     cc_res = cc.cluster_classify(data = parsed_files)
     labels = cc.generate_cluster_labels(cc_res)
-    labels.to_csv('labels.csv')
+    labels.to_csv('cache/labels.csv')
     # Extract attributes
     attr_ext = AttributeExtractor()
     attr_res = attr_ext.extract_from_files(parsed_files)
@@ -62,11 +57,9 @@ def process_files(files):
     result = pd.merge(labels, attr_res, on='file_name', how='left') 
     result['attributes'] = result[attr_res.columns.difference(['file_name'])].apply(lambda row: row.to_dict(), axis=1)
     result = result[['file_name', 'data', 'label','sensitivity', 'data_classifiers', 'responsible_values', 'retention_time', 'attributes']]
-    result.to_csv('result.csv')
+    result.to_csv('cache/result.csv')
     cdb = ChromaDB()
-    res = cdb.add_documents(result)
-    if res:
-        delete_files_in_directory(UPLOAD_FOLDER)
+    cdb.add_documents(result)
     delete_files_in_directory(UPLOAD_FOLDER)
 
 

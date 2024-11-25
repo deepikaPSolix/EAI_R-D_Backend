@@ -13,6 +13,9 @@ import os
 
 
 class ClusterAndClassify:
+    
+    def __init__(self) -> None:
+        self.ml_model_path = "cache/ml-model"
 
     def _find_optimal_clusters(self, data, max_clusters=5):
         inertia = []
@@ -78,21 +81,21 @@ class ClusterAndClassify:
 
         classifier = RandomForestClassifier(random_state=42)
         classifier.fit(cluster_X_tfidf, labels)
-        with open(os.path.join("ml-model", 'doc_classifier_model.pkl'), 'wb') as file:
+        with open(os.path.join(self.ml_model_path, 'doc_classifier_model.pkl'), 'wb') as file:
             pickle.dump(classifier, file)
 
-        with open(os.path.join("ml-model", 'tfidf_vectorizer.pkl'), 'wb') as file:
+        with open(os.path.join(self.ml_model_path, 'tfidf_vectorizer.pkl'), 'wb') as file:
             pickle.dump(tfidf_vectorizer, file)
 
     def classify_data(self, data: List[DocFile]):
         classfication_df = pd.DataFrame([d.to_dict() for d in data])
         classify_X = classfication_df['data']
 
-        with open(os.path.join("ml-model", 'tfidf_vectorizer.pkl'), 'rb') as file:
+        with open(os.path.join(self.ml_model_path, 'tfidf_vectorizer.pkl'), 'rb') as file:
             tfidf_vectorizer = pickle.load(file)
         classify_X_tfidf = tfidf_vectorizer.transform(classify_X)
 
-        with open(os.path.join("ml-model", 'doc_classifier_model.pkl'), 'rb') as file:
+        with open(os.path.join(self.ml_model_path, 'doc_classifier_model.pkl'), 'rb') as file:
             classifier = pickle.load(file)
 
         predicted_labels = classifier.predict(classify_X_tfidf)

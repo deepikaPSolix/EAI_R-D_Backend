@@ -15,7 +15,7 @@ class ChromaDB:
         return cls._instance
 
     def __init__(self):
-        self.chroma_client = chromadb.PersistentClient(path="./chromadb")
+        self.chroma_client = chromadb.PersistentClient(path="./cache/chromadb")
         self.collection = self.create_collection()
 
     def create_collection(self, name = 'documents'):

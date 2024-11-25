@@ -17,4 +17,5 @@ flashrank
 torch
 torchvision
 torchaudio
+python-ffmpeg
 openai-whisper
