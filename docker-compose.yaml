@@ -2,7 +2,7 @@ services:
   flask-app:
     build: ./src
     container_name: flask-app
-    restart: always
+    # restart: always
     ports:
       - "5000:5000"
     environment:
@@ -17,6 +17,7 @@ services:
       - ./cache/chromadb:/app/cache/chromadb
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chromadb/models:/root/.cache/chroma
+      - ./cache/paddleocr:/root/.paddleocr
     deploy:
       resources:
         reservations:
@@ -43,6 +44,7 @@ services:
       - ./cache/chroma/db:/app/cache/chromadb
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chroma/models:/root/.cache/chroma
+      - ./cache/paddleocr:/root/.paddleocr
 
     deploy:
       resources:

@@ -17,5 +17,11 @@ flashrank
 torch
 torchvision
 torchaudio
-python-ffmpeg
 openai-whisper
+#video
+pyspellchecker
+paddleocr
+paddlepaddle
+paddleocr
+opencv-python
+moviepy
