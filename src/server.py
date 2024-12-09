@@ -50,16 +50,16 @@ def process_files(files):
     labels = cc.generate_cluster_labels(cc_res)
     labels.to_csv('cache/labels.csv')
     # Extract attributes
-    # attr_ext = AttributeExtractor()
-    # attr_res = attr_ext.extract_from_files(parsed_files)
-    # attr_res.fillna('')
+    attr_ext = AttributeExtractor()
+    attr_res = attr_ext.extract_from_files(parsed_files)
+    attr_res.fillna('')
 
-    # result = pd.merge(labels, attr_res, on='file_name', how='left') 
-    # result['attributes'] = result[attr_res.columns.difference(['file_name'])].apply(lambda row: row.to_dict(), axis=1)
-    # result = result[['file_name', 'data', 'label','sensitivity', 'data_classifiers', 'responsible_values', 'retention_time', 'attributes']]
-    # result.to_csv('cache/result.csv')
-    # cdb = ChromaDB()
-    # cdb.add_documents(result)
+    result = pd.merge(labels, attr_res, on='file_name', how='left') 
+    result['attributes'] = result[attr_res.columns.difference(['file_name'])].apply(lambda row: row.to_dict(), axis=1)
+    result = result[['file_name', 'data', 'label','sensitivity', 'data_classifiers', 'responsible_values', 'retention_time', 'attributes']]
+    result.to_csv('cache/result.csv')
+    cdb = ChromaDB()
+    cdb.add_documents(result)
     delete_files_in_directory(UPLOAD_FOLDER)
 
 
