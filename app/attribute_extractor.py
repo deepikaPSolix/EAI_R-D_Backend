@@ -1,6 +1,6 @@
-from doc_file import DocFile
-from llm_model import LLMModel
-from models.medical_data_model import ExtractedData
+from app.doc_file import DocFile
+from app.llm_model import LLMModel
+from app.models.medical_data_model import ExtractedData
 from typing import List
 import pandas as pd
 

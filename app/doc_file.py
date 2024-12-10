@@ -1,6 +1,4 @@
-import json
 import os
-import subprocess
 import numpy as np
 from unstructured.partition.auto import partition
 from unstructured.partition.text import partition_text
@@ -9,7 +7,7 @@ from pathlib import Path
 import torch
 import whisper
 from moviepy import VideoFileClip
-from video_ocr import VideoOcr
+from app.video_ocr import VideoOcr
 
 class DocFile:
     def __init__(self, file_path: str):

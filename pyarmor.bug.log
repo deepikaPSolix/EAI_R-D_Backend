@@ -1,0 +1,12 @@
+[BUG]: no found input ".py"
+
+## Command Line
+/home/abhishekketkar/eai_doc_classifier/venv/bin/pyarmor gen -r src/server.py src/attribute_extractor.py src/chroma_db.py src/cluster_classify.py src/dist src/doc_file.py src/Dockerfile src/llm_model.py src/models src/pyarmor.bug.log src/pyarmor.debug.log src/rag.py src/requirements.txt src/server.py src/video_ocr.py .py
+
+## Environments
+Python 3.12.3
+Pyarmor 9.0.6 (trial), 000000, non-profits
+Platform linux.x86_64
+Native linux.x86_64
+Home /home/abhishekketkar/.pyarmor
+

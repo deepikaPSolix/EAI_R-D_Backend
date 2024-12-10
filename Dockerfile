@@ -30,4 +30,4 @@ COPY . /app
 EXPOSE 5000
 
 # Run app.py when the container launches
-CMD ["python", "server.py"]
+CMD ["flask", "run", "--host=0.0.0.0"]

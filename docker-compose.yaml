@@ -1,6 +1,6 @@
 services:
   flask-app:
-    build: ./src
+    build: ./
     container_name: flask-app
     # restart: always
     ports:
@@ -27,10 +27,10 @@ services:
               capabilities: [gpu]
 
   celery-worker:
-    build: ./src
+    build: ./
     container_name: celery-worker
     restart: always
-    command: celery -A server.celery worker --loglevel=info
+    command: celery -A celery_worker.celery worker --loglevel=info
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0

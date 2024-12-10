@@ -1,12 +1,9 @@
-from chroma_db import ChromaDB
-from llm_model import LLMModel
+from app.chroma_db import ChromaDB
+from app.llm_model import LLMModel
 from langchain.prompts import PromptTemplate
-from models.extracted_file_names import ExtractedFilesModel
+from app.models.extracted_file_names import ExtractedFilesModel
 from langchain.output_parsers import PydanticOutputParser
-import json
-
 from flashrank import Ranker, RerankRequest
-from langchain import hub
 
 
 class RAG:
