@@ -1,6 +1,8 @@
 services:
   flask-app:
-    build: ./
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     container_name: flask-app
     # restart: always
     ports:
@@ -27,7 +29,9 @@ services:
               capabilities: [gpu]
 
   celery-worker:
-    build: ./
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
     container_name: celery-worker
     restart: always
     command: celery -A celery_worker.celery worker --loglevel=info
