@@ -13,10 +13,10 @@ services:
     depends_on:
       - redis
     volumes:
-      - ./cache/output:/app/cache/output
-      - ./cache/ml-model:/app/cache/ml-model
-      - ./cache/uploads:/app/cache/uploads
-      - ./cache/chroma/db:/app/cache/chromadb
+      - ./cache/output:/myapp/cache/output
+      - ./cache/ml-model:/myapp/cache/ml-model
+      - ./cache/uploads:/myapp/cache/uploads
+      - ./cache/chroma/db:/myapp/cache/chromadb
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
@@ -41,10 +41,10 @@ services:
     depends_on:
       - redis
     volumes:
-      - ./cache/output:/app/cache/output
-      - ./cache/ml-model:/app/cache/ml-model
-      - ./cache/uploads:/app/cache/uploads
-      - ./cache/chroma/db:/app/cache/chromadb
+      - ./cache/output:/myapp/cache/output
+      - ./cache/ml-model:/myapp/cache/ml-model
+      - ./cache/uploads:/myapp/cache/uploads
+      - ./cache/chroma/db:/myapp/cache/chromadb
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
