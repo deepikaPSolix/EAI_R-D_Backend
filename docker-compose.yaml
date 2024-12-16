@@ -15,6 +15,7 @@ services:
     depends_on:
       - redis
     volumes:
+      - ./cache:/myapp/cache
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
       - ./cache/uploads:/myapp/cache/uploads
@@ -45,6 +46,7 @@ services:
     depends_on:
       - redis
     volumes:
+      - ./cache:/myapp/cache
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
       - ./cache/uploads:/myapp/cache/uploads

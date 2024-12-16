@@ -1,4 +1,4 @@
-from app.doc_file import DocFile
+from app.models.doc_file import DocFile
 from app.llm_model import LLMModel
 from app.models.medical_data_model import ExtractedData
 from typing import List

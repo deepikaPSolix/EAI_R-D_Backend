@@ -1,3 +1,4 @@
+from langchain_ollama import ChatOllama
 from langchain_together import ChatTogether
 from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import PromptTemplate
@@ -10,7 +11,7 @@ class LLMModel:
         self._initialize_model()
 
     def _initialize_model(self):
-        model = ChatTogether(temperature=0.1, model='meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo')
+        model = ChatOllama(temperature=0.1, model='llama3.1', base_url="http://192.168.1.116:11434")
         self.model = model
 
     def infer_model(self, query, data_model):

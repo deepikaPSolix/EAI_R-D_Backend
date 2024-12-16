@@ -1,7 +1,7 @@
 from typing import List
 import pandas as pd
 import numpy as np
-from app.doc_file import DocFile
+from app.models.doc_file import DocFile
 from app.llm_model import LLMModel
 from app.models.label_governance_model import GovernanceModel
 from sklearn.feature_extraction.text import TfidfVectorizer
@@ -47,11 +47,8 @@ class ClusterAndClassify:
         cluster_data = data[:data_partition]
         classification_data = data[data_partition:]
 
-        # df['combined_text'] = df[df.columns].apply(lambda row: ' | '.join(row.values.astype(str)), axis=1)
-
-
-        clustering_df = pd.DataFrame([d.to_dict() for d in cluster_data])
-        classfication_df = pd.DataFrame([d.to_dict() for d in classification_data])
+        clustering_df = pd.DataFrame([d.model_dump(exclude={'chunks'}) for d in cluster_data])
+        classfication_df = pd.DataFrame([d.model_dump(exclude={'chunks'})for d in classification_data])
         print('Clustering_df: ', clustering_df.shape,'\n', 'Classfication_df: ', classfication_df.shape)
 
         tfidf_vectorizer = TfidfVectorizer()
@@ -88,7 +85,7 @@ class ClusterAndClassify:
             pickle.dump(tfidf_vectorizer, file)
 
     def classify_data(self, data: List[DocFile]):
-        classfication_df = pd.DataFrame([d.to_dict() for d in data])
+        classfication_df = pd.DataFrame([d.model_dump(exclude={'chunks'}) for d in data])
         classify_X = classfication_df['data']
 
         with open(os.path.join(self.ml_model_path, 'tfidf_vectorizer.pkl'), 'rb') as file:
@@ -103,82 +100,24 @@ class ClusterAndClassify:
         return classfication_df
 
     
-    def generate_cluster_labels(self, cluster_df):
+    def generate_cluster_labels(self, cluster_df: pd.DataFrame):
         model = LLMModel()
         unique_classes = cluster_df["cluster_labels"].unique()
         res = []
         for c in unique_classes:
-            filtered_rows = cluster_df[cluster_df['cluster_labels'] == c].head(10)
+            filtered_rows = cluster_df[cluster_df['cluster_labels'] == c].sample(n=10)
             rows = []
             for row in filtered_rows.itertuples():
                 rows.append(f'file_name: {row.file_name}, data: {row.data}')
             query = f'''
-            Task: Cluster Document Analysis
+            You are provided with 5 chunks of text from each of 10 documents belonging to the same cluster. These chunks are a representative sample of the cluster's content. Your job is to analyze the provided data and generate a single, concise, and meaningful label that represents the central theme or topic of the entire cluster.
 
-            You are provided with a set of documents in a cluster. Perform the following tasks accurately:
+            Guidelines:
 
-            1. **Cluster Labeling**: Generate a clear and specific label that accurately represents the cluster. Return only the cluster name.
-
-            2. **Sensitivity Classification**: For each document, assign a sensitivity level (integer) based on the following categories:
-            - 1: Public Data (e.g., public reports, statistics)
-            - 2: Internal Data (internal use, not for external sharing)
-            - 3: Confidential Data (personal or sensitive information)
-            - 4: Restricted Data (highly sensitive, access limited)
-            - 5: Private Data (personal data protected by privacy laws)
-            - 6: Critical Data (vital for urgent care or life-saving actions)
-            - 7: Regulatory Data (compliance with legal/regulatory rules)
-
-            Ensure documents containing PII, trade secrets, legal, medical, or intellectual property are classified as level 3 or higher. Assign levels 6 or 7 for critical or regulatory data.
-
-            3. **Top Data Types**: Analyze the document and identify 3 to 5 **distinct** and meaningful data types that justify the sensitivity classification. Do not rely on the example data types provided below—these are only for reference. The identified data types must be directly related to the actual content of the document. Return these data types in CSV format. The data types should be relevant to the document's content, and similar types must not be repeated.
-
-            Reference examples (for understanding only, do not use as output unless relevant):
-                - PII
-                - PHI
-                - EHR Data
-                - Medical History
-                - Lab Results
-                - Prescription Data
-                - Patient Satisfaction Surveys
-                - Appointment Records
-                - Demographic Information
-                - Contact Information
-                - Health Insurance Details
-                - Caregiver Information
-                - Clinical Trial Data
-                - Adverse Event Reports
-                - Imaging Data
-                - Genetic Information
-                - Diagnosis Codes (ICD-10)
-                - Treatment Protocols
-                - Medical Devices Information
-                - Immunization Records
-                - Clinical Notes
-                - Anonymized Clinical Notes
-                - Research Findings
-                - Billing Information
-                - Insurance Claims Data
-                - Compliance Reports
-                - Audit Trails
-                - Internal Policies
-                - Staff Scheduling Information
-                - Facility Management Data
-                - Equipment Inventory
-                - Financial Reports
-                - Strategic Plans
-                - Billing Disputes
-                - Operational Efficiency Metrics
-                - Staffing Levels
-                - Risk Management Reports
-
-
-            4. **Data Points**: Provide up to 10 key that contribute to the sensitivity level. Use commas to seperate values.
-
-            5. **Retention Period**: Assign a retention period for each document based on its type, specifying the time in years and months.
-
-            6. Do not group files toghether. Generate output for each file.
-
-            Return the output strictly in the required JSON format, without any additional information.
+            Consider all the chunks holistically to identify the overarching theme shared by the documents.
+            The label should be clear, specific, and concise (e.g., "Sustainable Energy Solutions" or "Trends in Digital Marketing").
+            Avoid overly broad or overly specific labels; focus on capturing the central idea of the cluster based on the given chunks.
+            Disregard any minor details or outliers that do not align with the main topic.
 
             Cluster Data:
             {rows}

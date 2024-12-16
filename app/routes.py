@@ -5,7 +5,7 @@ from openai import NotFoundError
 from celery.result import AsyncResult
 from app.chroma_db import ChromaDB
 from app.cluster_classify import ClusterAndClassify
-from app.doc_file import DocFile
+from app.models.doc_file import DocFile
 from app.rag import RAG
 from app.tasks import process_files
 

@@ -25,3 +25,4 @@ paddlepaddle
 paddleocr
 opencv-python
 moviepy
+langchain_ollama

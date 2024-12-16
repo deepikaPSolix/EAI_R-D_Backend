@@ -11,3 +11,10 @@ class GovernanceAttributes(BaseModel):
 
 class GovernanceModel(BaseModel):
     attributes: List[GovernanceAttributes] = Field(description="The governance attributes of all the documents")
+
+class AttributesModel(BaseModel):
+    sensitivity: int = Field(0, description="The assigned sensitivity level of the document based on classification rules (1 to 7).")
+    responsible_values: List[str] = Field(default_factory=list, description="Up to 10 keys representing the data points that justify the sensitivity level, formatted as a list of strings.")
+    data_classifiers: List[str] = Field(default_factory=list, description="List of 1 to 5 distinct, meaningful data types present in the document (e.g., PII, EHR), excluding basic types like name, age, address.")
+    retention_time: str = Field("", description="The retention period for this document, specified in years and months based on the document type.")
+    attributes: Dict[str, str] = Field(default_factory=dict, description="Relevant data and attributes from the given text as key-value pairs.")
