@@ -31,7 +31,7 @@ def process_files(files):
             chunks = video_processor.process_file(f)
         else:
             chunks = generic_processor.process_file(f)
-        parsed_files.append(DocFile(file_name = file_name, file_type = file_type, chunks = chunks))
+        parsed_files.append(DocFile(file_name = file_name, file_type = file_type, chunks = chunks, data = " | ".join([chunk.text for chunk in chunks])))
 
     # Cluster Data
     # cc = ClusterAndClassify()
@@ -40,7 +40,7 @@ def process_files(files):
     # labels.to_csv('cache/labels.csv')
     # Extract attributes
     attr_ext = DynamicExtractor()
-    attr_res = attr_ext.extract_from_files(parsed_files)
+    attr_res = attr_ext.extract(parsed_files)
     attr_res.fillna('')
     attr_res.to_csv('cache/attrs.csv')
 

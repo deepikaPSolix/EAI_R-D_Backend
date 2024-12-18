@@ -20,7 +20,7 @@ class FileProcessor(ABC):
         """Process the file and return chunks of data."""
         pass
 
-    def __chunks_from_text(self, text:str) -> list[Element] :
+    def chunks_from_text(self, text:str) -> list[Element] :
         """
         Splits the provided text into smaller chunks for processing.
 
@@ -31,10 +31,10 @@ class FileProcessor(ABC):
             list[Element]: A list of chunked elements derived from the input text.
         """
 
-        elements = partition_text(text)
+        elements = partition_text(text=text)
         return chunk_elements(elements, overlap=50, max_characters=2000)
     
-    def __chunks_from_file(self, file_path:str) -> list[Element] :
+    def chunks_from_file(self, file_path:str) -> list[Element] :
         """
         Processes a file to partition its contents into smaller, manageable chunks.
 
@@ -51,13 +51,13 @@ class FileProcessor(ABC):
 
 class GenericFileProcessor(FileProcessor):
     def process_file(self, file_path) -> list[Element]:
-        return self.__chunks_from_file(file_path)
+        return super().chunks_from_file(file_path)
 
 
 class AudioFileProcessor(FileProcessor):
     def process_file(self, file_path) -> list[Element]:
         audio_text = self.extract_text_from_audio(file_path)
-        return self.__chunks_from_text(audio_text)
+        return super().chunks_from_text(audio_text)
 
     def extract_text_from_audio(self, file_path: str):
         print("GPU: ", torch.cuda.is_available())
@@ -78,11 +78,11 @@ class VideoFileProcessor(AudioFileProcessor):
 
             if self._has_audio(audioClip=clip.audio):
                 clip.audio.write_audiofile("cache/output/audio.mp3")
-                video_text = self.__extract_text_from_video(video_path=file_path, pixel_diff_threshold=0.5)
+                video_text = self.__extract_text_from_video(clip=clip, pixel_diff_threshold=0.5)
                 audio_text = self.extract_text_from_audio("cache/output/audio.mp3")
             else:
-                video_text = self.__extract_text_from_video(video_path=file_path, pixel_diff_threshold=0.1)
-            return self.__chunks_from_text(audio_text + video_text)
+                video_text = self.__extract_text_from_video(clip=clip, pixel_diff_threshold=0.1)
+            return super().chunks_from_text(audio_text + video_text)
         finally:
             clip.close()
 
@@ -109,7 +109,7 @@ class VideoFileProcessor(AudioFileProcessor):
         prev_frame = None
         prev_text = ""
 
-        frames = clip.iter_frames(fps=1)
+        frames = clip.iter_frames(fps=fps)
         for frame in frames:
             if prev_frame is not None:
                 pixel_diff = self.__calculate_pixel_difference(prev_frame, frame)
