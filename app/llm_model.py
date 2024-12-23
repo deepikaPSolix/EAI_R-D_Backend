@@ -1,3 +1,4 @@
+from pydantic import BaseModel
 from langchain_ollama import ChatOllama
 from langchain_together import ChatTogether
 from langchain.output_parsers import PydanticOutputParser
@@ -11,10 +12,11 @@ class LLMModel:
         self._initialize_model()
 
     def _initialize_model(self):
+        # model = ChatTogether(temperature=0.1, model='meta-llama/Llama-3.3-70B-Instruct-Turbo',)
         model = ChatOllama(temperature=0.1, model='llama3.1', base_url="http://192.168.1.116:11434")
         self.model = model
 
-    def infer_model(self, query, data_model):
+    def infer_model(self, query, data_model) -> BaseModel:
         output_parser = PydanticOutputParser(pydantic_object=data_model)
         format_instructions = output_parser.get_format_instructions()
 
@@ -29,4 +31,3 @@ class LLMModel:
             return res
         except Exception as e:
             print(e)
-            return None

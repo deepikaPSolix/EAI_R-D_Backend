@@ -10,24 +10,24 @@ class DynamicExtractor:
     def __init__(self) -> None:
         self.model = LLMModel()
 
-    def extract(self, files: List[DocFile]) -> pd.DataFrame:
-        extracted_data = [self.extract_from_file(f) for f in files]
-        return pd.DataFrame(extracted_data)
+    def extract(self, files:pd.DataFrame) -> pd.DataFrame:
+        extracted_attributes = [self.extract_from_file(f.chunks) for f in files.itertuples()]
+        files['attributes'] = extracted_attributes
+        return files
 
-    def extract_from_file(self, file: DocFile) -> AttributesModel:
-        chunks = [c.text for c in file.chunks]
+    def extract_from_file(self, chunks: list) -> AttributesModel:
+        chunks_text = [c.text for c in chunks]
         res = []
-        for i in range(0, len(chunks), 10):
-            curr_chunks = chunks[i: min(i + 10, len(chunks))]
+        for i in range(0, len(chunks_text), 10):
+            curr_chunks = chunks_text[i: min(i + 10, len(chunks_text))]
             attr_res = self.model.infer_model(self._extraction_query(curr_chunks), AttributesModel)
             print(attr_res.model_dump())
             if attr_res:
                 res.append(attr_res)
 
         merged_data = self.merge_extracted_data(res)
-        data_dict = merged_data.model_dump()
-        data_dict['file_name'] = file.file_name
-        return data_dict
+
+        return merged_data
 
     def merge_extracted_data(self, extracted_data: List[AttributesModel]) -> AttributesModel:
         max_sens_obj = max(extracted_data, key=lambda attr: attr.sensitivity)

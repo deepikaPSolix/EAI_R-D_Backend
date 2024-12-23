@@ -10,7 +10,7 @@ class GovernanceAttributes(BaseModel):
     retention_time: str = Field(default="", description="The retention period for this document, specified in years and months based on the document type.")
 
 class GovernanceModel(BaseModel):
-    attributes: List[GovernanceAttributes] = Field(description="The governance attributes of all the documents")
+    label: str = Field(default="", description="The specific label representing the content of the document cluster.")
 
 class AttributesModel(BaseModel):
     sensitivity: int = Field(0, description="The assigned sensitivity level of the document based on classification rules (1 to 7).")
