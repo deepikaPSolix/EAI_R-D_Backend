@@ -29,19 +29,18 @@ class ChromaDB:
             metadatas = []
             for _,row in data_df.iterrows():
                 doc_name = row['file_name']
-                doc_data = row['data']
-                doc_label = row['label']
-                doc_sensitivity = row['sensitivity']
-                doc_attributes = row['attributes']
+                doc_label = row['cluster_label']
+                doc_sensitivity = row['attributes']['sensitivity']
+                doc_attributes = row['attributes']['attributes']
 
                 metadatas.append(
                      {
                         'label':doc_label,
                         'sensitivity':doc_sensitivity,
-                        'data_classifiers': row['data_classifiers'],
-                        'responsible_values': row['responsible_values'],
+                        'data_classifiers': "".join(row['attributes']['data_classifiers']),
+                        'responsible_values': "".join(row['attributes']['responsible_values']),
                         'file_name': doc_name,
-                        'retention_time': row['retention_time'],
+                        'retention_time': row['attributes']['retention_time'],
                         'attributes':json.dumps(doc_attributes),
                     }
                 )

@@ -232,7 +232,7 @@ class LabelGenerator:
                 n=min(10, len(data[data[cluster_column] == cluster_id]))
             )
             rows = [
-                f'file_name: {row.file_name}, chunks: {" ".join([c.text for c in row.chunks[:min(10, len(row.chunks))]])}'
+                f'file_name: {row.file_name}, chunks: {" ".join([c for c in row.chunks[:min(10, len(row.chunks))]])}'
                 for row in cluster_samples.itertuples()
             ]
 

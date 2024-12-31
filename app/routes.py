@@ -7,7 +7,7 @@ from app.chroma_db import ChromaDB
 from app.cluster_classify import ClusterAndClassify
 from app.models.doc_file import DocFile
 from app.rag import RAG
-from app.tasks import process_files
+from app.tasks import process_file_workflow
 
 main = Blueprint('main', __name__)
 
@@ -40,7 +40,7 @@ def cluster_and_classify():
             print("Filename: ", file.filename)
             saved_files.append(file_path)
 
-        task = process_files.delay(saved_files)
+        task = process_file_workflow(saved_files)
 
         return jsonify({"status": "processing", "task_id": task.id}), 202
     except Exception as e:
