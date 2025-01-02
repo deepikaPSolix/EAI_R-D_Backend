@@ -34,6 +34,9 @@ COPY --from=builder /myapp/dist /myapp/
 
 COPY celery_worker.py /myapp/
 
+ENV NLTK_DATA=/usr/share/nltk_data
+RUN mkdir -p $NLTK_DATA && python -m nltk.downloader -d $NLTK_DATA punkt punkt_tab averaged_perceptron_tagger_eng
+
 # Expose port 5000 for the Flask app
 EXPOSE 5000
 

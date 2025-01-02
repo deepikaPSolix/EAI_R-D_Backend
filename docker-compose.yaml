@@ -23,6 +23,7 @@ services:
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
+      - nltk_data:/usr/share/nltk_data 
     deploy:
       resources:
         reservations:
@@ -54,6 +55,7 @@ services:
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
+      - nltk_data:/usr/share/nltk_data 
 
     deploy:
       resources:
@@ -69,3 +71,7 @@ services:
     ports:
       - "6380:6379"
     restart: always
+
+
+volumes:
+  nltk_data: 
