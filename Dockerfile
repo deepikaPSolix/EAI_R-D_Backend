@@ -32,6 +32,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy obfuscated files from the builder stage
 COPY --from=builder /myapp/dist /myapp/
 
+# Copy the modified opik library into site-packages
+COPY opik /usr/local/lib/python3.12/site-packages/opik
+
 COPY celery_worker.py /myapp/
 
 ENV NLTK_DATA=/usr/share/nltk_data

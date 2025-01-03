@@ -22,7 +22,10 @@ openai-whisper
 pyspellchecker
 paddleocr
 paddlepaddle
-paddleocr
 opencv-python
 moviepy
 langchain_ollama
+uuid6
+transformers
+sentence_transformers
+opik

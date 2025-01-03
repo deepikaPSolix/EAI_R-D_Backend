@@ -1,3 +1,4 @@
+import json
 import os
 import celery
 from flask import Blueprint, jsonify, request
@@ -7,7 +8,7 @@ from app.chroma_db import ChromaDB
 from app.cluster_classify import ClusterAndClassify
 from app.models.doc_file import DocFile
 from app.rag import RAG
-from app.tasks import process_file_workflow
+from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction
 
 main = Blueprint('main', __name__)
 
@@ -78,8 +79,12 @@ def query_rag():
         if data is None:
             raise ValueError("Missing data in the request body")
 
-        rag = RAG(ChromaDB())
+        rag = RAG(ChromaDB()) 
         res = rag.process_user_query(data['query'], data["access_level"])
+       
+        combinedList=[res[1],res[0],res[3],data["query"]]
+        evaluationFunction.delay(combinedList,include_relevance=True,include_hallucination=True,include_moderation=False,evaluation_result_file="queryEvaluationScreen1Results.json",evaluation_result_csv="queryEvaluationScreen1Results.csv")
+        
 
         return jsonify({"response": res[0], "curated_query": res[1], "files": res[2]})
     except Exception as e:
@@ -94,8 +99,19 @@ def query_rag2():
             raise ValueError("Missing data in the request body")
 
         rag = RAG(ChromaDB())
-        res = rag.process_user_query_screen2(data['query'], data["access_level"], data["user_role"])
+        res,curated_query,top_reranked_docs = rag.process_user_query_screen2(data['query'], data["access_level"], data["user_role"])
 
+        formatted_data = [
+            f"filename: {item['file_name']}, text: {item['text']}" for item in top_reranked_docs
+        ]
+
+        ## This is for TextAnalysis class (cosine distance)
+        combinedList = [ 
+            str(res),            
+            formatted_data,
+            data["query"]    
+        ]
+        screen2EvaluationFunction.delay(combinedList)
         return jsonify({"response": res})
     except Exception as e:
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
@@ -149,3 +165,117 @@ def delete_files():
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+# Eval Routes
+
+@main.route('/sensitivityEvalApi',methods=["GET"])
+def sensitivityEvalResults():
+    try:
+        EVALUATION_RESULTS_FILE = './cache/sensitivityEvaluation.json'
+
+        if not os.path.exists(EVALUATION_RESULTS_FILE):
+            return jsonify([]), 200
+
+        # Read existing data
+        with open(EVALUATION_RESULTS_FILE, 'r') as file:
+            try:
+                data = json.load(file)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid JSON format in evaluation results file."}), 500
+
+        # Return the data as a JSON response
+        return jsonify(data), 200
+
+    except Exception as e:
+        print(f"Error fetching evaluation results: {e}")
+        return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
+    
+@main.route('/attributesEvalApi',methods=["GET"])
+def attributesEvalResults():
+    try:
+        EVALUATION_RESULTS_FILE = './cache/fileAttributesResult.json'
+
+        if not os.path.exists(EVALUATION_RESULTS_FILE):
+            return jsonify([]), 200
+
+        # Read existing data
+        with open(EVALUATION_RESULTS_FILE, 'r') as file:
+            try:
+                data = json.load(file)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid JSON format in evaluation results file."}), 500
+
+        # Return the data as a JSON response
+        return jsonify(data), 200
+
+    except Exception as e:
+        print(f"Error fetching evaluation results: {e}")
+        return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
+    
+@main.route('/clusterEvalApi',methods=["GET"])
+def clusterEvalResults():
+    try:
+        EVALUATION_RESULTS_FILE = './cache/fileClusterResult.json'
+
+        if not os.path.exists(EVALUATION_RESULTS_FILE):
+            return jsonify([]), 200
+
+        # Read existing data
+        with open(EVALUATION_RESULTS_FILE, 'r') as file:
+            try:
+                data = json.load(file)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid JSON format in evaluation results file."}), 500
+
+        # Return the data as a JSON response
+        return jsonify(data), 200
+
+    except Exception as e:
+        print(f"Error fetching evaluation results: {e}")
+        return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
+    
+@main.route('/rag1EvalApi',methods=["GET"])
+def rag1EvalResults():
+    try:
+        EVALUATION_RESULTS_FILE = './cache/queryEvaluationScreen1Results.json'
+
+        if not os.path.exists(EVALUATION_RESULTS_FILE):
+            return jsonify([]), 200
+
+        # Read existing data
+        with open(EVALUATION_RESULTS_FILE, 'r') as file:
+            try:
+                data = json.load(file)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid JSON format in evaluation results file."}), 500
+
+        # Return the data as a JSON response
+        return jsonify(data), 200
+
+    except Exception as e:
+        print(f"Error fetching evaluation results: {e}")
+        return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
+    
+
+@main.route('/rag2EvalApi',methods=["GET"])
+def rag2EvalResults():
+    try:
+        EVALUATION_RESULTS_FILE = './cache/queryEvaluationScreen2Result.json'
+
+        if not os.path.exists(EVALUATION_RESULTS_FILE):
+            return jsonify([]), 200
+
+        # Read existing data
+        with open(EVALUATION_RESULTS_FILE, 'r') as file:
+            try:
+                data = json.load(file)
+            except json.JSONDecodeError:
+                return jsonify({"error": "Invalid JSON format in evaluation results file."}), 500
+
+        # Return the data as a JSON response
+        return jsonify(data), 200
+
+    except Exception as e:
+        print(f"Error fetching evaluation results: {e}")
+        return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
+    

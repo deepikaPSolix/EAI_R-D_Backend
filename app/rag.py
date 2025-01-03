@@ -107,8 +107,8 @@ class RAG:
         """
         
         response = self.model.invoke(access_instructions) 
-        files = self.show_files(response.content)
-        return (response.content, curated_query, files)
+        files = self.show_files(response.content)  
+        return (response.content, curated_query, files,metadata_only)
     
     def process_user_query_screen2(self, query, access_level, user_role):
     
@@ -140,7 +140,11 @@ class RAG:
 
         # Invoke the language model with the constructed prompt
         response = self.model.invoke(context)
-        return response.content
+        print(type(top_reranked_docs))
+        #data=pd.DataFrame({"input":curated_query,"output":response.content,"files":[top_reranked_docs]})
+        #data.to_csv("halln.csv")
+        
+        return (response.content,curated_query,top_reranked_docs)
 
     
     def show_files(self, rag_response):
