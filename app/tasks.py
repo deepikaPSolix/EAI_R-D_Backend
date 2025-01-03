@@ -18,9 +18,9 @@ def process_file_workflow(files: list):
     job = group([parse_file.s(f) for f in files])
     workflow = chain(
         job, generate_labels.s(),
-        insert_to_db.si(),  # Wrap group in a chord and follow with generate_labels
-        fileSensitivityEvalutionFunction.si(),
-        fileAttributesEvaluationFunction.si(),
+        insert_to_db.s(),  # Wrap group in a chord and follow with generate_labels
+        # fileSensitivityEvalutionFunction.si(),
+        # fileAttributesEvaluationFunction.si(),
         # fileClusterEvaluationFunction.si()
         # cleanup.s()  # Add cleanup as the final step in the chain
     )
@@ -174,19 +174,20 @@ def fileAttributesEvaluationFunction():
     file_name='./cache/result.csv'
     df=pd.read_csv(file_name)
 
-    columnsToRead=['file_name','attributes']
+    columnsToRead=['file_name','attributes', 'data']
     dataD=df[columnsToRead]
-    for i in dataD:
+
+    for index, row in dataD.iterrows():
         # print(i['file_name'])
         # print(i['attributes'])
 
-        backup_directory = os.path.join(os.getcwd(), UPLOAD_FOLDER, i['file_name'])
-        content=''
-        if os.path.isfile(backup_directory):
-            with open(backup_directory,'r') as file:
-                content=file.read()
-                # print(" the contents of the file")
-                # print(content)
+        backup_directory = os.path.join(os.getcwd(), UPLOAD_FOLDER, row['file_name'])
+        content=row['data']
+        # if os.path.isfile(backup_directory):
+        #     with open(backup_directory,'r') as file:
+        #         content=file.read()
+        #         # print(" the contents of the file")
+        #         # print(content)
             
         if not content=='':
             query_input='''
@@ -195,11 +196,11 @@ def fileAttributesEvaluationFunction():
             - If there are multiple values for the same attribute, select the most relevant one based on the context provided.
             - Make sure to check is the text is medical data.
             '''
-            output=i['attributes']
+            output=json.loads(row['attributes'].replace("'", '"'))['attributes']
             context=content
             combined_data=[query_input,output,context]
             time.sleep(3)
-            evaluationFunction.delay(combinedList=combined_data,include_relevance=False,include_hallucination=True,include_moderation=False,evaluation_result_file="fileAttributesResult.json",evaluation_result_csv="fileAttributesResult.csv",fileName=i['file_name'])
+            evaluationFunction.delay(combinedList=combined_data,include_relevance=False,include_hallucination=True,include_moderation=False,evaluation_result_file="fileAttributesResult.json",evaluation_result_csv="fileAttributesResult.csv",fileName=row['file_name'])
 
 
     return "Done with fileAttributesEvaluationFunction!!! "
@@ -208,113 +209,28 @@ def fileAttributesEvaluationFunction():
 @shared_task
 def fileClusterEvaluationFunction():
 
-    folder_path = "./cache/cluster_files"
-    visited_files = set() 
-    questions_list = []
-    results_dict = {}
+    file_name='./cache/result.csv'
+    df=pd.read_csv(file_name)
+
+    columnsToRead=['file_name','attributes', 'data', 'cluster', 'cluster_label']
+    dataD=df[columnsToRead]
+
 
     inputQ='''Task: Cluster Document Analysis
 
             You are provided with a set of documents in a cluster. Perform the following tasks accurately:
 
-            1. **Cluster Labeling**: Generate a clear and specific label that accurately represents the cluster. Return only the cluster name.
+            **Cluster Labeling**: Generate a clear and specific label that accurately represents the cluster. Return only the cluster name.
 
-            2. **Sensitivity Classification**: For each document, assign a sensitivity level (integer) based on the following categories:
-            - 1: Public Data (e.g., public reports, statistics)
-            - 2: Internal Data (internal use, not for external sharing)
-            - 3: Confidential Data (personal or sensitive information)
-            - 4: Restricted Data (highly sensitive, access limited)
-            - 5: Private Data (personal data protected by privacy laws)
-            - 6: Critical Data (vital for urgent care or life-saving actions)
-            - 7: Regulatory Data (compliance with legal/regulatory rules)
-
-            Ensure documents containing PII, trade secrets, legal, medical, or intellectual property are classified as level 3 or higher. Assign levels 6 or 7 for critical or regulatory data.
-
-            3. **Top Data Types**: Analyze the document and identify 3 to 5 **distinct** and meaningful data types that justify the sensitivity classification. Do not rely on the example data types provided below—these are only for reference. The identified data types must be directly related to the actual content of the document. Return these data types in CSV format. The data types should be relevant to the document's content, and similar types must not be repeated.
-
-            Reference examples (for understanding only, do not use as output unless relevant):
-                - PII
-                - PHI
-                - EHR Data
-                - Medical History
-                - Lab Results
-                - Prescription Data
-                - Patient Satisfaction Surveys
-                - Appointment Records
-                - Demographic Information
-                - Contact Information
-                - Health Insurance Details
-                - Caregiver Information
-                - Clinical Trial Data
-                - Adverse Event Reports
-                - Imaging Data
-                - Genetic Information
-                - Diagnosis Codes (ICD-10)
-                - Treatment Protocols
-                - Medical Devices Information
-                - Immunization Records
-                - Clinical Notes
-                - Anonymized Clinical Notes
-                - Research Findings
-                - Billing Information
-                - Insurance Claims Data
-                - Compliance Reports
-                - Audit Trails
-                - Internal Policies
-                - Staff Scheduling Information
-                - Facility Management Data
-                - Equipment Inventory
-                - Financial Reports
-                - Strategic Plans
-                - Billing Disputes
-                - Operational Efficiency Metrics
-                - Staffing Levels
-                - Risk Management Reports
-
-
-            4. **Data Points**: Provide up to 10 key that contribute to the sensitivity level. Use commas to seperate values.
-
-            5. **Retention Period**: Assign a retention period for each document based on its type, specifying the time in years and months.
         '''
     
-    questions_list = []
-    results_dict = {}
-    
-    # Step 1: Group files by their identifiers
-    file_map = {}
-    for file_name in os.listdir(folder_path):
-        # Extract the identifier from the file name
-        if file_name.startswith('cluster') and file_name.endswith('.txt'):
-            identifier = file_name[len('cluster'):file_name.find('.txt')]
-        elif file_name.startswith('qres_cluster') and file_name.endswith('.json'):
-            identifier = file_name[len('qres_cluster'):file_name.find('.json')]
-        else:
-            continue  # Skip files that don't match the patterns
+    for cluster in dataD['cluster'].unique():
+        cluster_samples = dataD[dataD['cluster'] == int(cluster)]
+        combinedList=[inputQ,cluster_samples['cluster_label'].tolist(),cluster_samples['data'].tolist()]
+        time.sleep(7)
+        evaluationFunction.delay(combinedList,include_moderation=False,evaluation_result_file="fileClusterResult.json",evaluation_result_csv="fileClusterResult.csv")
 
-        if identifier not in file_map:
-            file_map[identifier] = {}
-        if file_name.startswith('cluster'):
-            file_map[identifier]['txt'] = file_name
-        elif file_name.startswith('qres_cluster'):
-            file_map[identifier]['json'] = file_name
-
-
-    # Step 2: Process files in pairs
-    for identifier, files in file_map.items():
-        txt_file = files.get('txt')
-        json_file = files.get('json')
-
-        if txt_file and json_file:
-            # Both files are present; process them together
-            with open(os.path.join(folder_path, txt_file), 'r', encoding='utf-8') as file:
-                txt_content = file.read().strip()
-
-            with open(os.path.join(folder_path, json_file), 'r', encoding='utf-8') as file:
-                json_content = json.load(file)
             
-            combinedList=[[inputQ],[json_content],[txt_content]]
-            time.sleep(7)
-            evaluationFunction.delay(combinedList,include_moderation=False,evaluation_result_file="fileClusterResult.json",evaluation_result_csv="fileClusterResult.csv")
 
     return "Done fileClusterEvaluationFunction!!"
 
@@ -323,18 +239,19 @@ def fileSensitivityEvalutionFunction():
     file_name='./cache/result.csv'
     df=pd.read_csv(file_name)
 
-    columnsToRead=['file_name','sensitivity']
+    columnsToRead=['file_name','attributes', 'data']
 
     selectedCols=df[columnsToRead]
     #sensitivityCol=df[['sensitivity']]
 
     for index, row in selectedCols.iterrows():
-        backup_directory = os.path.join(os.getcwd(), './cache/backup_folder', row['file_name'])
-        content=''
-        if os.path.isfile(backup_directory):
-            with open(backup_directory,'r') as file:
-                content=file.read()
-
+        # backup_directory = os.path.join(os.getcwd(), './cache/backup_folder', row['file_name'])
+        # content=''
+        # if os.path.isfile(backup_directory):
+        #     with open(backup_directory,'r') as file:
+        #         content=file.read()
+        attributes = json.loads(row['attributes'].replace("'", '"'))
+        content = row['data']
         inputPrompt='''What is the Sensivitiy level for this document or cluster:
             Here are the details just for your information
             1. **Sensitivity Classification**: For each document, assign a sensitivity level (integer) based on the following categories:
@@ -349,7 +266,7 @@ def fileSensitivityEvalutionFunction():
             Ensure documents containing PII, trade secrets, legal, medical, or intellectual property are classified as level 3 or higher. Assign levels 6 or 7 for critical or regulatory data.
 
             '''
-        outputRow=row['sensitivity']
+        outputRow=attributes['sensitivity']
 
         context=content
         combinedList=[inputPrompt,outputRow,context]
