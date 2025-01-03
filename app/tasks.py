@@ -2,7 +2,7 @@ import json
 import os
 from pathlib import Path
 import time
-from celery import group, shared_task, chain
+from celery import chord, group, shared_task, chain
 import pandas as pd
 
 from app.chroma_db import ChromaDB
@@ -16,22 +16,51 @@ from app.utils import UPLOAD_FOLDER, delete_files_in_directory
 
 def process_file_workflow(files: list):
     job = group([parse_file.s(f) for f in files])
-    workflow = chain(
-        job, generate_labels.s(),
-        insert_to_db.s(),  # Wrap group in a chord and follow with generate_labels
-        # fileSensitivityEvalutionFunction.si(),
-        # fileAttributesEvaluationFunction.si(),
-        # fileClusterEvaluationFunction.si()
-        # cleanup.s()  # Add cleanup as the final step in the chain
-    )
+    # workflow = chain(
+    #     job, generate_labels.s(),
+    #     insert_to_db.s(),  # Wrap group in a chord and follow with generate_labels
+    #     fileSensitivityEvalutionFunction.si(),
+    #     fileAttributesEvaluationFunction.si(),
+    #     fileClusterEvaluationFunction.si(),
+    #     cleanup.s()  # Add cleanup as the final step in the chain
+    # )
 
     # workflow = chain(
     #     fileSensitivityEvalutionFunction.si(),
     #     fileAttributesEvaluationFunction.si(),
     #     fileClusterEvaluationFunction.si()
     # )
-    result = workflow.apply_async()
-    return result
+
+    initial_chain = chain(
+    job,
+    generate_labels.s(),
+    insert_to_db.s(),
+    )
+
+    evaluation_tasks = group(
+        [
+            fileSensitivityEvalutionFunction.si(),
+            fileAttributesEvaluationFunction.si(),
+            fileClusterEvaluationFunction.si(),
+        ],
+        # cleanup.si()
+    )
+
+    # Define the complete workflow
+    workflow = chain(initial_chain, evaluation_tasks)
+
+    # Trigger the entire workflow and capture the task ID of the initial chain
+    initial_chain_result = initial_chain.apply_async()
+    initial_chain_task_id = initial_chain_result.id
+
+    # Trigger the rest of the workflow using the initial chain's result
+    workflow_result = workflow.apply_async(
+        args=[], 
+        kwargs={}, 
+        task_id=initial_chain_task_id
+    )
+    # result = workflow.apply_async()
+    return initial_chain_result
 
 @shared_task()
 def process_files(files):
@@ -92,6 +121,7 @@ def process_files(files):
 def generate_labels(data: list):
     try:
         df = pd.DataFrame(data)
+        df.to_csv('cache/gen_labels.csv')
         clustering = Clustering()
         classification = Classification()
         label_generator = LabelGenerator()
@@ -155,7 +185,7 @@ def parse_file(file_path: str):
         print("Fn: parse_file Filename: " + file_name + " Error: " + str(e))
 
 @shared_task()
-def cleanup(*args):
+def cleanup():
     try:
         delete_files_in_directory(UPLOAD_FOLDER)
         return "Files deleted!"
@@ -226,7 +256,12 @@ def fileClusterEvaluationFunction():
     
     for cluster in dataD['cluster'].unique():
         cluster_samples = dataD[dataD['cluster'] == int(cluster)]
-        combinedList=[inputQ,cluster_samples['cluster_label'].tolist(),cluster_samples['data'].tolist()]
+        attributes = {"attributes":[{
+            "label": cs['cluster_label'],
+            "file_name": cs['file_name']
+        } for i, cs in cluster_samples.iterrows()]}
+       
+        combinedList=[[inputQ], [attributes], [" ".join(cluster_samples['data'].tolist())]]
         time.sleep(7)
         evaluationFunction.delay(combinedList,include_moderation=False,evaluation_result_file="fileClusterResult.json",evaluation_result_csv="fileClusterResult.csv")
 

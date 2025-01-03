@@ -32,6 +32,7 @@ class ChromaDB:
                 doc_label = row['cluster_label']
                 doc_sensitivity = row['attributes']['sensitivity']
                 doc_attributes = row['attributes']['attributes']
+                doc_attributes["file_type"] = row['file_type']
 
                 metadatas.append(
                      {
