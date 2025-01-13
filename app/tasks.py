@@ -15,51 +15,37 @@ from app.ragEvaluationScreenTwo import TextAnalysis
 from app.utils import UPLOAD_FOLDER, delete_files_in_directory
 
 def process_file_workflow(files: list):
-    job = group([parse_file.s(f) for f in files])
-    # workflow = chain(
-    #     job, generate_labels.s(),
-    #     insert_to_db.s(),  # Wrap group in a chord and follow with generate_labels
-    #     fileSensitivityEvalutionFunction.si(),
-    #     fileAttributesEvaluationFunction.si(),
-    #     fileClusterEvaluationFunction.si(),
-    #     cleanup.s()  # Add cleanup as the final step in the chain
-    # )
+    parse_files = group([parse_file.s(f) for f in files])
 
-    # workflow = chain(
-    #     fileSensitivityEvalutionFunction.si(),
-    #     fileAttributesEvaluationFunction.si(),
-    #     fileClusterEvaluationFunction.si()
-    # )
-
-    initial_chain = chain(
-    job,
-    generate_labels.s(),
-    insert_to_db.s(),
+    process_files_chain = chain(
+        parse_files,
+        generate_labels.s(),
+        insert_to_db.s(),
     )
 
-    evaluation_tasks = group(
+    
+
+    evaluation_tasks = chain(
         [
             fileSensitivityEvalutionFunction.si(),
             fileAttributesEvaluationFunction.si(),
             fileClusterEvaluationFunction.si(),
         ],
-        # cleanup.si()
     )
 
     # Define the complete workflow
-    workflow = chain(initial_chain, evaluation_tasks)
+    workflow = chain(process_files_chain, cleanup.si())
 
     # Trigger the entire workflow and capture the task ID of the initial chain
-    initial_chain_result = initial_chain.apply_async()
+    initial_chain_result = process_files_chain.freeze()
     initial_chain_task_id = initial_chain_result.id
 
     # Trigger the rest of the workflow using the initial chain's result
-    workflow_result = workflow.apply_async(
+    workflow.apply_async(
         args=[], 
         kwargs={}, 
         task_id=initial_chain_task_id
     )
-    # result = workflow.apply_async()
     return initial_chain_result
 
 @shared_task()
@@ -159,6 +145,7 @@ def generate_labels(data: list):
 def insert_to_db(data):
     try:
         df = pd.DataFrame(data)
+        df.to_csv('cache/insert_to_db.csv')
         chroma_db = ChromaDB()
         chroma_db.add_documents(df)
     except Exception as e:
@@ -193,10 +180,9 @@ def cleanup():
         print("Error: " + str(e))
 
 
-
+#=============================================
 # Evaluation
-
-
+#=============================================
 
 @shared_task
 def fileAttributesEvaluationFunction():

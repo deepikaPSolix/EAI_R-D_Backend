@@ -1,7 +1,7 @@
 import json
 import os
 import celery
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from openai import NotFoundError
 from celery.result import AsyncResult
 from app.chroma_db import ChromaDB
@@ -19,6 +19,7 @@ ML_FOLDER = 'cache/ml-model'
 
 @main.route("/")
 def home():
+    current_app.logger.info("Welcome to EAI!!!")
     return "<p>Welcome to EAI!!!</p>"
 
 
