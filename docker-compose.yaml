@@ -3,15 +3,16 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: flask-app
+    container_name: dev-flask-app
     # restart: always
     ports:
       - "5000:5000"
     env_file:
       - .env
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - FLASK_ENV=development
+      - CELERY_BROKER_URL=redis://dev-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://dev-redis:6379/0
     depends_on:
       - redis
     volumes:
@@ -24,7 +25,7 @@ services:
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
       - nltk_data:/usr/share/nltk_data 
-      - ./opik:/usr/local/lib/python3.12/site-packages/opik
+      - ./cache/logs:/myapp/cache/logs
     deploy:
       resources:
         reservations:
@@ -37,14 +38,15 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: celery-worker
+    container_name: dev-celery-worker
     restart: always
-    command: celery -A celery_worker.celery worker --loglevel=info
+    command: celery -A celery_worker.celery worker --autoscale=10,2 --loglevel=info
     env_file:
       - .env
     environment:
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - FLASK_ENV=development
+      - CELERY_BROKER_URL=redis://dev-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://dev-redis:6379/0
     depends_on:
       - redis
     volumes:
@@ -56,8 +58,8 @@ services:
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
+      - ./cache/logs:/myapp/cache/logs
       - nltk_data:/usr/share/nltk_data 
-      - ./opik:/usr/local/lib/python3.12/site-packages/opik
     deploy:
       resources:
         reservations:
@@ -68,9 +70,9 @@ services:
 
   redis:
     image: "redis"
-    container_name: redis
+    container_name: dev-redis
     ports:
-      - "6380:6379"
+      - "6379:6379"
     restart: always
 
 

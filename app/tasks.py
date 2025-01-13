@@ -34,7 +34,7 @@ def process_file_workflow(files: list):
     )
 
     # Define the complete workflow
-    workflow = chain(process_files_chain, cleanup.si())
+    workflow = chain(process_files_chain, evaluation_tasks, cleanup.si())
 
     # Trigger the entire workflow and capture the task ID of the initial chain
     initial_chain_result = process_files_chain.freeze()
@@ -47,61 +47,6 @@ def process_file_workflow(files: list):
         task_id=initial_chain_task_id
     )
     return initial_chain_result
-
-@shared_task()
-def process_files(files):
-    try:
-        pass
-        # parsed_files = parse_files(files)
-        # parsed_files.to_csv('cache/parsed_files.csv')
-
-        # attr_ext = DynamicExtractor()
-        # attr_res = attr_ext.extract(parsed_files[['file_name', 'chunks']])
-        # attr_res.to_csv('cache/attrs.csv')
-
-        # parsed_files = pd.merge(parsed_files, attr_res[['file_name', 'attributes']], on='file_name', how='left')
-
-
-        # # Cluster Data
-        # clustering = Clustering()
-        # classification = Classification()
-        # label_generator = LabelGenerator()
-
-        # partition_index = int(len(parsed_files) * 0.7)
-        # clustering_data = parsed_files[:partition_index]
-        # classification_data = parsed_files[partition_index:]
-
-        # # Clustering
-        # clustering_df = clustering_data[["file_name", "data"]]
-        # cluster_labels = clustering.cluster_data(clustering_df)
-        # clustering_df["cluster"] = cluster_labels
-
-        # # Train the classifier
-        # classification.train(clustering_df["data"], clustering_df["cluster"])
-
-        # # Classify remaining data
-        # classification_df = classification_data[["file_name", "data"]]
-        # classification_df["cluster"] = classification.classify(
-        #     classification_df["data"]
-        # )
-
-        # # # Combine results
-        # cc_res_df = pd.concat([clustering_df, classification_df], ignore_index=True)
-        # parsed_files = pd.merge(parsed_files, cc_res_df[['file_name', 'cluster']], on="file_name", how="left")
-
-        # labeled_data = label_generator.generate_labels(parsed_files[['file_name', 'cluster', 'chunks']])
-        # labeled_data.to_csv('cache/labels.csv')
-        # parsed_files['cluster_label'] = labeled_data['cluster_label']
-        # parsed_files.to_csv('cache/final_df.csv')
-
-    except Exception as e:
-        print("Error: " + str(e))
-    finally:
-        # delete_files_in_directory(UPLOAD_FOLDER)
-        pass
-
-
-    return "Added documents to chromadb!"
 
 @shared_task()
 def generate_labels(data: list):
@@ -151,8 +96,8 @@ def insert_to_db(data):
     except Exception as e:
         print("Error: " + str(e))
 
-@shared_task()
-def parse_file(file_path: str):
+@shared_task(bind=True, max_retries=3)
+def parse_file(self, file_path: str):
     file_type = Path(file_path).suffix[1:]
     file_name = Path(file_path).name
     try:
@@ -170,6 +115,7 @@ def parse_file(file_path: str):
         return {'file_name' : file_name, 'file_type' : file_type, 'chunks': [chunk.text for chunk in chunks], 'data' : " | ".join([chunk.text for chunk in chunks]), 'attributes' : attr_res.model_dump()}
     except Exception as e:
         print("Fn: parse_file Filename: " + file_name + " Error: " + str(e))
+        self.retry(countdown=5, exc=e)
 
 @shared_task()
 def cleanup():
