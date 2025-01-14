@@ -12,19 +12,25 @@ from app.dynamic_extractor import DynamicExtractor
 from app.file_processor import AudioFileProcessor, GenericFileProcessor, VideoFileProcessor
 from app.ragEvaluation import ragEval
 from app.ragEvaluationScreenTwo import TextAnalysis
-from app.utils import delete_files_in_directory
+from app.utils import delete_files_in_directory, is_audio_or_video_file
+from celery.exceptions import MaxRetriesExceededError
 
 def process_file_workflow(files: list):
-    parse_files = group([parse_file.s(f) for f in files])
+    files_group = []
+    for f in files:
+        if is_audio_or_video_file(f):
+            # Route audio/video files to GPU queue
+            files_group.append(parse_file.s(f).set(queue='gpu_queue'))
+        else:
+            # Route other files to CPU queue (default)
+            files_group.append(parse_file.s(f).set(queue='cpu_queue'))
+    parse_files = group(files_group)
 
     process_files_chain = chain(
         parse_files,
         generate_labels.s(),
         insert_to_db.s(),
     )
-
-    
-
     evaluation_tasks = chain(
         [
             fileSensitivityEvalutionFunction.si(),
@@ -38,18 +44,17 @@ def process_file_workflow(files: list):
 
     # Trigger the entire workflow and capture the task ID of the initial chain
     initial_chain_result = process_files_chain.freeze()
-    initial_chain_task_id = initial_chain_result.id
 
     # Trigger the rest of the workflow using the initial chain's result
     workflow.apply_async(
         args=[], 
         kwargs={}, 
-        task_id=initial_chain_task_id
+        task_id=initial_chain_result.id
     )
     return initial_chain_result
 
-@shared_task()
-def generate_labels(data: list):
+@shared_task(bind=True, max_retries=3)
+def generate_labels(self, data: list):
     try:
         df = pd.DataFrame(data)
         df.to_csv('cache/gen_labels.csv')
@@ -84,7 +89,8 @@ def generate_labels(data: list):
         parsed_files.to_csv('cache/result.csv')
         return parsed_files.to_dict()
     except Exception as e:
-        print("Error: " + str(e))
+        current_app.logger.error(str(e))
+        self.retry(exc=e)
 
 @shared_task()
 def insert_to_db(data):
@@ -94,7 +100,7 @@ def insert_to_db(data):
         chroma_db = ChromaDB()
         chroma_db.add_documents(df)
     except Exception as e:
-        print("Error: " + str(e))
+        current_app.logger.error(str(e))
 
 @shared_task(bind=True, max_retries=3)
 def parse_file(self, file_path: str):
@@ -112,10 +118,14 @@ def parse_file(self, file_path: str):
             chunks = generic_processor.process_file(file_path)
         attr_ext = DynamicExtractor()
         attr_res = attr_ext.extract_from_file(chunks)
-        return {'file_name' : file_name, 'file_type' : file_type, 'chunks': [chunk.text for chunk in chunks], 'data' : " | ".join([chunk.text for chunk in chunks]), 'attributes' : attr_res.model_dump()}
+        return {'file_name' : file_name, 'file_type' : file_type, 'chunks': [chunk.text for chunk in chunks], 'data' : " | ".join([chunk.text for chunk in chunks]), 'attributes' : attr_res.model_dump(), "status": "success"}
     except Exception as e:
-        print("Fn: parse_file Filename: " + file_name + " Error: " + str(e))
-        self.retry(countdown=5, exc=e)
+        current_app.logger.error(str(e))
+        try:
+            self.retry(exc=e)
+        except MaxRetriesExceededError:
+            # Handle final failure after retries
+            return {'file_name' : file_name, 'file_type' : file_type, 'chunks': None, 'attributes' : None, "status": "failed"}
 
 @shared_task()
 def cleanup():
@@ -123,7 +133,7 @@ def cleanup():
         delete_files_in_directory(current_app.config['UPLOAD_DIR_PATH'])
         return "Files deleted!"
     except Exception as e:
-        print("Error: " + str(e))
+        current_app.logger.error(str(e))
 
 
 #=============================================

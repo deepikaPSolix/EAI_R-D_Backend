@@ -40,6 +40,7 @@ def cluster_and_classify():
 
         return jsonify({"status": "processing", "task_id": task.id}), 202
     except Exception as e:
+        current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 @main.route("/docs/classify", methods=['POST'])
@@ -83,6 +84,7 @@ def query_rag():
 
         return jsonify({"response": res[0], "curated_query": res[1], "files": res[2]})
     except Exception as e:
+        current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     
 
@@ -109,6 +111,7 @@ def query_rag2():
         screen2EvaluationFunction.delay(combinedList)
         return jsonify({"response": res})
     except Exception as e:
+        current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 @main.route('/status/<task_id>')
@@ -132,6 +135,7 @@ def fetch_files():
     except NotFoundError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:
+        current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 @main.route('/docs', methods=['PATCH'])
@@ -148,6 +152,7 @@ def update_files():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
+        current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     
 @main.route('/docs', methods=['DELETE'])
@@ -159,6 +164,7 @@ def delete_files():
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
+        current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     
 # Eval Routes

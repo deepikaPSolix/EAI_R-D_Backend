@@ -16,16 +16,25 @@ services:
     depends_on:
       - redis
     volumes:
-      - dev_idc_data:/myapp/cache
-      - dev_idc_data:/myapp/cache/output
-      - dev_idc_data:/myapp/cache/ml-model
-      - dev_idc_data:/myapp/cache/uploads
-      - dev_idc_data:/myapp/cache/chromadb
-      - dev_idc_data:/root/.cache/whisper
-      - dev_idc_data:/root/.cache/chroma
-      - dev_idc_data:/root/.paddleocr
-      - dev_idc_data:/usr/share/nltk_data 
-      - dev_idc_data:/myapp/cache/logs
+      # - dev_idc_data:/myapp/cache
+      # - dev_idc_data:/myapp/cache/output
+      # - dev_idc_data:/myapp/cache/ml-model
+      # - dev_idc_data:/myapp/cache/uploads
+      # - dev_idc_data:/myapp/cache/chromadb
+      # - dev_idc_data:/root/.cache/whisper
+      # - dev_idc_data:/root/.cache/chroma
+      # - dev_idc_data:/root/.paddleocr
+      # - dev_idc_data:/usr/share/nltk_data 
+      # - dev_idc_data:/myapp/cache/logs
+      - ./cache:/myapp/cache
+      - ./cache/output:/myapp/cache/output
+      - ./cache/ml-model:/myapp/cache/ml-model
+      - ./cache/uploads:/myapp/cache/uploads
+      - ./cache/chroma/db:/myapp/cache/chromadb
+      - ./cache/whisper:/root/.cache/whisper
+      - ./cache/chroma/models:/root/.cache/chroma
+      - ./cache/paddleocr:/root/.paddleocr
+      - nltk_data:/usr/share/nltk_data 
     deploy:
       resources:
         reservations:
@@ -40,7 +49,7 @@ services:
       dockerfile: Dockerfile
     container_name: dev-celery-worker
     restart: always
-    command: celery -A celery_worker.celery worker --autoscale=10,2 --loglevel=info
+    command: celery -A celery_worker.celery worker --autoscale=10,2 --loglevel=info -Q cpu_queue
     env_file:
       - .env
     environment:
@@ -50,16 +59,68 @@ services:
     depends_on:
       - redis
     volumes:
-      - dev_idc_data:/myapp/cache
-      - dev_idc_data:/myapp/cache/output
-      - dev_idc_data:/myapp/cache/ml-model
-      - dev_idc_data:/myapp/cache/uploads
-      - dev_idc_data:/myapp/cache/chromadb
-      - dev_idc_data:/root/.cache/whisper
-      - dev_idc_data:/root/.cache/chroma
-      - dev_idc_data:/root/.paddleocr
-      - dev_idc_data:/usr/share/nltk_data 
-      - dev_idc_data:/myapp/cache/logs
+      # - dev_idc_data:/myapp/cache
+      # - dev_idc_data:/myapp/cache/output
+      # - dev_idc_data:/myapp/cache/ml-model
+      # - dev_idc_data:/myapp/cache/uploads
+      # - dev_idc_data:/myapp/cache/chromadb
+      # - dev_idc_data:/root/.cache/whisper
+      # - dev_idc_data:/root/.cache/chroma
+      # - dev_idc_data:/root/.paddleocr
+      # - dev_idc_data:/usr/share/nltk_data 
+      # - dev_idc_data:/myapp/cache/logs
+      - ./cache:/myapp/cache
+      - ./cache/output:/myapp/cache/output
+      - ./cache/ml-model:/myapp/cache/ml-model
+      - ./cache/uploads:/myapp/cache/uploads
+      - ./cache/chroma/db:/myapp/cache/chromadb
+      - ./cache/whisper:/root/.cache/whisper
+      - ./cache/chroma/models:/root/.cache/chroma
+      - ./cache/paddleocr:/root/.paddleocr
+      - nltk_data:/usr/share/nltk_data 
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  celery-worker-gpu:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dev-celery-worker-gpu
+    restart: always
+    command: celery -A celery_worker.celery worker --concurrency=1 --loglevel=info -Q gpu_queue
+    env_file:
+      - .env
+    environment:
+      - FLASK_ENV=development
+      - CELERY_BROKER_URL=redis://dev-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://dev-redis:6379/0
+    depends_on:
+      - redis
+    volumes:
+      # - dev_idc_data:/myapp/cache
+      # - dev_idc_data:/myapp/cache/output
+      # - dev_idc_data:/myapp/cache/ml-model
+      # - dev_idc_data:/myapp/cache/uploads
+      # - dev_idc_data:/myapp/cache/chromadb
+      # - dev_idc_data:/root/.cache/whisper
+      # - dev_idc_data:/root/.cache/chroma
+      # - dev_idc_data:/root/.paddleocr
+      # - dev_idc_data:/usr/share/nltk_data 
+      # - dev_idc_data:/myapp/cache/logs
+      - ./cache:/myapp/cache
+      - ./cache/output:/myapp/cache/output
+      - ./cache/ml-model:/myapp/cache/ml-model
+      - ./cache/uploads:/myapp/cache/uploads
+      - ./cache/chroma/db:/myapp/cache/chromadb
+      - ./cache/whisper:/root/.cache/whisper
+      - ./cache/chroma/models:/root/.cache/chroma
+      - ./cache/paddleocr:/root/.paddleocr
+      - nltk_data:/usr/share/nltk_data 
     deploy:
       resources:
         reservations:
@@ -78,3 +139,4 @@ services:
 
 volumes:
   dev_idc_data: 
+  nltk_data:

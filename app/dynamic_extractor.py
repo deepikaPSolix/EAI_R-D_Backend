@@ -21,7 +21,6 @@ class DynamicExtractor:
         for i in range(0, len(chunks_text), 10):
             curr_chunks = chunks_text[i: min(i + 10, len(chunks_text))]
             attr_res = self.model.infer_model(self._extraction_query(curr_chunks), AttributesModel)
-            print(attr_res.model_dump())
             if attr_res:
                 res.append(attr_res)
 

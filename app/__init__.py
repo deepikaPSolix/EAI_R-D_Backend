@@ -29,6 +29,13 @@ def make_celery(app: Flask) -> Celery:
 
     celery_app = Celery(app.name, task_cls=FlaskTask)
     celery_app.config_from_object('app.config.Config')
+    celery_app.conf.task_queues = {
+        'cpu_queue': {'exchange': 'cpu', 'routing_key': 'cpu'},
+        'gpu_queue': {'exchange': 'gpu', 'routing_key': 'gpu'},
+    }
+    celery_app.conf.task_default_queue = 'cpu_queue'
+    celery_app.conf.task_default_exchange = 'cpu'
+    celery_app.conf.task_default_routing_key = 'cpu'
     celery_app.set_default()
     app.extensions["celery"] = celery_app
     return celery_app
@@ -51,14 +58,14 @@ def configure_logging(app: Flask):
     )
     file_handler.setLevel(logging.INFO)
     file_handler.setFormatter(
-        logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        logging.Formatter('[%(asctime)s] - %(name)s - %(levelname)s - %(funcName)s - %(message)s')
     )
 
     # Stream handler (console logging)
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.DEBUG)
     console_handler.setFormatter(
-        logging.Formatter('[%(asctime)s] - %(name)s - %(levelname)s - %(message)s')
+        logging.Formatter('[%(asctime)s] - %(name)s - %(levelname)s - %(funcName)s - %(message)s')
     )
 
     # Add handlers to the Flask app logger

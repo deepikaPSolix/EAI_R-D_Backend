@@ -13,3 +13,21 @@ def delete_files_in_directory(directory_path):
                 print(f"Deleted: {item_path}")
     except Exception as e:
         print(f"An error occurred: {e}")
+
+
+def is_audio_or_video_file(file_path):
+    """
+    Check if a file is an audio or video file based on its extension.
+
+    :param file_path: Path to the file.
+    :return: True if the file is audio or video, False otherwise.
+    """
+    # Supported audio and video extensions
+    audio_extensions = {'.mp3', '.wav', '.aac', '.flac', '.ogg', '.m4a', '.wma', '.alac'}
+    video_extensions = {'.mp4', '.avi', '.mkv', '.mov', '.flv', '.wmv', '.webm', '.mpeg', '.3gp'}
+
+    # Extract file extension
+    _, ext = os.path.splitext(file_path)
+    ext = ext.lower()
+
+    return ext in audio_extensions or ext in video_extensions
