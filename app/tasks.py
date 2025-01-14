@@ -2,17 +2,17 @@ import json
 import os
 from pathlib import Path
 import time
-from celery import chord, group, shared_task, chain
+from celery import group, shared_task, chain
+from flask import current_app
 import pandas as pd
 
 from app.chroma_db import ChromaDB
 from app.cluster_classify import Classification, Clustering, LabelGenerator
-from app.models.doc_file import DocFile
 from app.dynamic_extractor import DynamicExtractor
 from app.file_processor import AudioFileProcessor, GenericFileProcessor, VideoFileProcessor
 from app.ragEvaluation import ragEval
 from app.ragEvaluationScreenTwo import TextAnalysis
-from app.utils import UPLOAD_FOLDER, delete_files_in_directory
+from app.utils import delete_files_in_directory
 
 def process_file_workflow(files: list):
     parse_files = group([parse_file.s(f) for f in files])
@@ -54,7 +54,7 @@ def generate_labels(data: list):
         df = pd.DataFrame(data)
         df.to_csv('cache/gen_labels.csv')
         clustering = Clustering()
-        classification = Classification()
+        classification = Classification(model_path=current_app.config['ML_DIR_PATH'])
         label_generator = LabelGenerator()
 
         partition_index = int(len(df) * 0.7)
@@ -120,7 +120,7 @@ def parse_file(self, file_path: str):
 @shared_task()
 def cleanup():
     try:
-        delete_files_in_directory(UPLOAD_FOLDER)
+        delete_files_in_directory(current_app.config['UPLOAD_DIR_PATH'])
         return "Files deleted!"
     except Exception as e:
         print("Error: " + str(e))
@@ -143,7 +143,7 @@ def fileAttributesEvaluationFunction():
         # print(i['file_name'])
         # print(i['attributes'])
 
-        backup_directory = os.path.join(os.getcwd(), UPLOAD_FOLDER, row['file_name'])
+        backup_directory = os.path.join(os.getcwd(), current_app.config['UPLOAD_DIR_PATH'], row['file_name'])
         content=row['data']
         # if os.path.isfile(backup_directory):
         #     with open(backup_directory,'r') as file:

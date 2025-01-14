@@ -16,16 +16,16 @@ services:
     depends_on:
       - redis
     volumes:
-      - ./cache:/myapp/cache
-      - ./cache/output:/myapp/cache/output
-      - ./cache/ml-model:/myapp/cache/ml-model
-      - ./cache/uploads:/myapp/cache/uploads
-      - ./cache/chroma/db:/myapp/cache/chromadb
-      - ./cache/whisper:/root/.cache/whisper
-      - ./cache/chroma/models:/root/.cache/chroma
-      - ./cache/paddleocr:/root/.paddleocr
-      - nltk_data:/usr/share/nltk_data 
-      - ./cache/logs:/myapp/cache/logs
+      - dev_idc_data:/myapp/cache
+      - dev_idc_data:/myapp/cache/output
+      - dev_idc_data:/myapp/cache/ml-model
+      - dev_idc_data:/myapp/cache/uploads
+      - dev_idc_data:/myapp/cache/chromadb
+      - dev_idc_data:/root/.cache/whisper
+      - dev_idc_data:/root/.cache/chroma
+      - dev_idc_data:/root/.paddleocr
+      - dev_idc_data:/usr/share/nltk_data 
+      - dev_idc_data:/myapp/cache/logs
     deploy:
       resources:
         reservations:
@@ -50,16 +50,16 @@ services:
     depends_on:
       - redis
     volumes:
-      - ./cache:/myapp/cache
-      - ./cache/output:/myapp/cache/output
-      - ./cache/ml-model:/myapp/cache/ml-model
-      - ./cache/uploads:/myapp/cache/uploads
-      - ./cache/chroma/db:/myapp/cache/chromadb
-      - ./cache/whisper:/root/.cache/whisper
-      - ./cache/chroma/models:/root/.cache/chroma
-      - ./cache/paddleocr:/root/.paddleocr
-      - ./cache/logs:/myapp/cache/logs
-      - nltk_data:/usr/share/nltk_data 
+      - dev_idc_data:/myapp/cache
+      - dev_idc_data:/myapp/cache/output
+      - dev_idc_data:/myapp/cache/ml-model
+      - dev_idc_data:/myapp/cache/uploads
+      - dev_idc_data:/myapp/cache/chromadb
+      - dev_idc_data:/root/.cache/whisper
+      - dev_idc_data:/root/.cache/chroma
+      - dev_idc_data:/root/.paddleocr
+      - dev_idc_data:/usr/share/nltk_data 
+      - dev_idc_data:/myapp/cache/logs
     deploy:
       resources:
         reservations:
@@ -77,4 +77,4 @@ services:
 
 
 volumes:
-  nltk_data: 
+  dev_idc_data: 

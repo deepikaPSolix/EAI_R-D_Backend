@@ -1,9 +1,5 @@
 import os
 
-
-UPLOAD_FOLDER = 'cache/uploads'
-ML_FOLDER = 'cache/ml-model'
-
 def delete_files_in_directory(directory_path):
     try:
         # Loop through all items in the directory

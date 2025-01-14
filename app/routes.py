@@ -1,6 +1,5 @@
 import json
 import os
-import celery
 from flask import Blueprint, current_app, jsonify, request
 from openai import NotFoundError
 from celery.result import AsyncResult
@@ -11,11 +10,6 @@ from app.rag import RAG
 from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction
 
 main = Blueprint('main', __name__)
-
-# Ensure the folder for saving uploaded files exists
-UPLOAD_FOLDER = 'cache/uploads'
-ML_FOLDER = 'cache/ml-model'
-
 
 @main.route("/")
 def home():
@@ -37,7 +31,7 @@ def cluster_and_classify():
                 return jsonify({"error": "Empty filename"}), 400
 
             # Save each file to the upload folder
-            file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+            file_path = os.path.join(current_app.config['UPLOAD_DIR_PATH'], file.filename)
             file.save(file_path)
             print("Filename: ", file.filename)
             saved_files.append(file_path)
@@ -61,7 +55,7 @@ def classify():
             return jsonify({"error": "Empty filename"}), 400
 
         # Save each file to the upload folder
-        file_path = os.path.join(UPLOAD_FOLDER, file.filename)
+        file_path = os.path.join(current_app.config['UPLOAD_DIR_PATH'], file.filename)
         file.save(file_path)
         print("Filename: ", file.filename)
         saved_files.append(file_path)
