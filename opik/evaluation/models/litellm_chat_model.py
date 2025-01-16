@@ -13,7 +13,7 @@ LOGGER = logging.getLogger(__name__)
 class LiteLLMChatModel(base_model.OpikBaseModel):
     def __init__(
         self,
-        model_name: str = "together_ai/meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo",
+        model_name: str = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
         must_support_arguments: Optional[List[str]] = None,
         **completion_kwargs: Any,
     ) -> None:

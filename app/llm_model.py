@@ -9,7 +9,7 @@ from langchain_core.rate_limiters import InMemoryRateLimiter
 class LLMModel:
     def __init__(self, model_source:str = "ollama"):
         if model_source == "together":
-             self.model = ChatTogether(temperature=0.1, model='meta-llama/Llama-3.3-70B-Instruct-Turbo',)
+             self.model = ChatTogether(temperature=0.1, model='meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',)
         else:
             self.model = ChatOllama(temperature=0.1, model='llama3.1', base_url="http://192.168.1.116:11434")
 

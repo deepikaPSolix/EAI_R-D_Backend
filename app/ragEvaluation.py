@@ -31,11 +31,7 @@ class ragEval:
             output=self.output,
             context=self.context
         )
-        print("Hallucination: ")
-        print(haResult)
-        
-        print("Hallucination: ")
-        print(haResult)
+      
         
         return (haResult.value,haResult.reason)
 
