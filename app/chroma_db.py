@@ -2,6 +2,7 @@ import chromadb
 import uuid
 import json
 
+from flask import current_app
 from pandas import DataFrame
 
 class ChromaDB:
@@ -30,7 +31,7 @@ class ChromaDB:
             for _,row in data_df.iterrows():
                 doc_name = row['file_name']
                 doc_label = row['cluster_label']
-                doc_sensitivity = row['attributes']['sensitivity']
+                doc_sensitivity = int(row['attributes']['sensitivity'])
                 doc_attributes = row['attributes']['attributes']
                 doc_attributes["file_type"] = row['file_type']
 
@@ -56,7 +57,7 @@ class ChromaDB:
     def update_documents(self, data_dict):
         ids = [d['id'] for d in data_dict]
         documents = [d['data'] for d in data_dict]
-        metadatas = [{'label':d['label'], 'sensitivity': d['sensitivity'], 'attributes':json.dumps(d['attributes'])} for d in data_dict]
+        metadatas = [{'label':d['label'], 'sensitivity': int(d['sensitivity']), 'attributes':json.dumps(d['attributes'])} for d in data_dict]
         try:
             res = self.collection.upsert(
                 ids = ids,
@@ -124,7 +125,9 @@ class ChromaDB:
 
     def delete_all_docs(self):
         try:
-            res = self.collection.get()
-            self.collection.delete(ids=res['ids'])
+            collection_name = self.collection.name
+            self.chroma_client.delete_collection(name=collection_name)
+            self.collection = self.chroma_client.create_collection(name=collection_name)
         except Exception as e:
+            current_app.logger.error(str(e))
             print("[delete_all_docs] Exception - " + str(e))

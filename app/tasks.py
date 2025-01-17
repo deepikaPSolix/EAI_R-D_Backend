@@ -26,34 +26,30 @@ def process_file_workflow(files: list):
             files_group.append(parse_file.s(f).set(queue='cpu_queue'))
     parse_files = group(files_group)
 
-    process_files_chain = chain(
+    process_files_workflow = chain(
         parse_files,
         generate_labels.s(),
         insert_to_db.s(),
     )
-    evaluation_tasks = chain(
-        [
-            fileSensitivityEvalutionFunction.si(),
-            fileAttributesEvaluationFunction.si(),
-            fileClusterEvaluationFunction.si(),
-        ],
+
+    process_files_workflow.freeze
+
+    evaluation_workflow = chain(
+        fileSensitivityEvalutionFunction.si(),
+        fileAttributesEvaluationFunction.si(),
+        fileClusterEvaluationFunction.si(),
     )
 
-    # Define the complete workflow
-    workflow = chain(process_files_chain, evaluation_tasks, cleanup.si())
+    final_workflow = chain(process_files_workflow, evaluation_workflow, cleanup.si())
 
-    # Trigger the entire workflow and capture the task ID of the initial chain
-    initial_chain_result = process_files_chain.freeze()
 
-    # Trigger the rest of the workflow using the initial chain's result
-    workflow.apply_async(
-        args=[], 
-        kwargs={}, 
-        task_id=initial_chain_result.id
-    )
-    return initial_chain_result
+    final_workflow.apply_async()
 
-@shared_task(bind=True, max_retries=3)
+
+    current_app.logger.info(f"Initial Workflow started with task ID:")
+    return final_workflow
+
+@shared_task(bind=True, max_retries=3, retry_backoff=False)
 def generate_labels(self, data: list):
     try:
         df = pd.DataFrame(data)
@@ -90,7 +86,7 @@ def generate_labels(self, data: list):
         return parsed_files.to_dict()
     except Exception as e:
         current_app.logger.error(str(e))
-        self.retry(exc=e)
+        self.retry(exc=e, countdown=5)
 
 @shared_task()
 def insert_to_db(data):
@@ -102,7 +98,7 @@ def insert_to_db(data):
     except Exception as e:
         current_app.logger.error(str(e))
 
-@shared_task(bind=True, max_retries=3)
+@shared_task(bind=True, max_retries=3, retry_backoff=False, countdown=5)
 def parse_file(self, file_path: str):
     file_type = Path(file_path).suffix[1:]
     file_name = Path(file_path).name
@@ -122,7 +118,7 @@ def parse_file(self, file_path: str):
     except Exception as e:
         current_app.logger.error(str(e))
         try:
-            self.retry(exc=e)
+            self.retry(exc=e, countdown=5)
         except MaxRetriesExceededError:
             # Handle final failure after retries
             return {'file_name' : file_name, 'file_type' : file_type, 'chunks': None, 'attributes' : None, "status": "failed"}

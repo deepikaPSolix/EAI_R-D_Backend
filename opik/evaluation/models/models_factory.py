@@ -3,7 +3,7 @@ from . import base_model, litellm_chat_model
 from dotenv import load_dotenv
 import os
 
-DEFAULT_GPT_MODEL_NAME = "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free"
+DEFAULT_GPT_MODEL_NAME = "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo"
 
 load_dotenv()
 os.environ["TOGETHERAI_API_KEY"] = os.getenv("TOGETHER_API_KEY_OPIK")

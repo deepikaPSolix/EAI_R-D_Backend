@@ -14,6 +14,16 @@ def delete_files_in_directory(directory_path):
     except Exception as e:
         print(f"An error occurred: {e}")
 
+def delete_files(file_paths: list):
+    for file_path in file_paths:
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                current_app.logger.info(f"Deleted: {file_path}")
+        except Exception as e:
+            from flask import current_app
+            current_app.logger.error(str(e))
+
 
 def is_audio_or_video_file(file_path):
     """

@@ -240,7 +240,7 @@ class LabelGenerator:
             You are provided with 5 chunks of text from each of 10 documents belonging to the same cluster. 
             These chunks are a representative sample of the cluster's content. Your job is to analyze the provided 
             data and generate a single, concise, and meaningful label that represents the central theme or topic 
-            of the entire cluster.
+            of the entire cluster. Just answer the question and do not ask any clarifying questions.
 
             Cluster Data:
             {rows}

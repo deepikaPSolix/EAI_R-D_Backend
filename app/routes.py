@@ -8,6 +8,7 @@ from app.cluster_classify import ClusterAndClassify
 from app.models.doc_file import DocFile
 from app.rag import RAG
 from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction
+from app.utils import delete_files
 
 main = Blueprint('main', __name__)
 
@@ -37,7 +38,7 @@ def cluster_and_classify():
             saved_files.append(file_path)
 
         task = process_file_workflow(saved_files)
-
+        
         return jsonify({"status": "processing", "task_id": task.id}), 202
     except Exception as e:
         current_app.logger.error(str(e))
@@ -126,7 +127,7 @@ def get_status(task_id):
 
 
 @main.route('/docs', methods = ["GET"])
-def fetch_files():
+def fetch_docs():
     try:
         db = ChromaDB()
         res = db.get()
@@ -139,7 +140,7 @@ def fetch_files():
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 @main.route('/docs', methods=['PATCH'])
-def update_files():
+def update_docs():
     try:
         data = request.get_json()
         # Check if data is not None (i.e., the JSON body was valid)
@@ -156,16 +157,16 @@ def update_files():
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     
 @main.route('/docs', methods=['DELETE'])
-def delete_files():
+def delete_docs():
     try:
         ChromaDB().delete_all_docs()
-        return jsonify({'status': "Deleted all records."})
-
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
+        FILES_TO_CLEAR=["queryEvaluationScreen1Results.json","queryEvaluationScreen2Result.json", "sensitivityEvaluation.json", "fileAttributesResult.json","fileClusterResult.json"]
+        file_paths = [os.path.join(current_app.config['BASE_DIR'], file_name) for file_name in FILES_TO_CLEAR]
+        delete_files(file_paths)
+        return jsonify({'status': "success"})
     except Exception as e:
         current_app.logger.error(str(e))
-        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+        return jsonify({"status": "failed", "error": f"Internal Server Error: {str(e)}"}), 500
     
 # Eval Routes
 
