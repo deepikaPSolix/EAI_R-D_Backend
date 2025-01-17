@@ -3,8 +3,6 @@ from langchain_ollama import ChatOllama
 from langchain_together import ChatTogether
 from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import PromptTemplate
-from langchain_core.rate_limiters import InMemoryRateLimiter
-
 
 class LLMModel:
     def __init__(self, model_source:str = "ollama"):

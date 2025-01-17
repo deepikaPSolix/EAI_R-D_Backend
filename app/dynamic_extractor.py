@@ -1,7 +1,6 @@
 from typing import List
 
 import pandas as pd
-from app.models.doc_file import DocFile
 from app.llm_model import LLMModel
 from app.models.label_governance_model import AttributesModel
 

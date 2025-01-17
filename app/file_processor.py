@@ -12,8 +12,6 @@ from unstructured.partition.auto import partition
 from unstructured.chunking.basic import chunk_elements
 from unstructured.documents.elements import Element
 
-from app.video_ocr import VideoOcr
-
 class FileProcessor(ABC):
     @abstractmethod
     def process_file(self, file_path:str) -> list[Element]:

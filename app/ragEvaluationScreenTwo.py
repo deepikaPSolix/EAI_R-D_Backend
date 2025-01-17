@@ -1,7 +1,6 @@
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from sentence_transformers import SentenceTransformer, util
 import torch
-import os
 
 
 class TextAnalysis:

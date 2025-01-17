@@ -1,11 +1,5 @@
 import opik
-
-#opik.configure(use_local=True)
-import opik
-
-#opik.configure(use_local=True)
 from opik.evaluation.metrics import Hallucination, AnswerRelevance, Moderation
-# from ollama_model_opik import get
 
 class ragEval:
     def __init__(self, ip=None, op=None, context=None):

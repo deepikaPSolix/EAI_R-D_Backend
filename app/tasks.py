@@ -12,13 +12,13 @@ from app.dynamic_extractor import DynamicExtractor
 from app.file_processor import AudioFileProcessor, GenericFileProcessor, VideoFileProcessor
 from app.ragEvaluation import ragEval
 from app.ragEvaluationScreenTwo import TextAnalysis
-from app.utils import delete_files_in_directory, is_audio_or_video_file
+import app.utils as utils
 from celery.exceptions import MaxRetriesExceededError
 
 def process_file_workflow(files: list):
     files_group = []
     for f in files:
-        if is_audio_or_video_file(f):
+        if utils.is_audio_or_video_file(f):
             # Route audio/video files to GPU queue
             files_group.append(parse_file.s(f).set(queue='gpu_queue'))
         else:
@@ -126,7 +126,7 @@ def parse_file(self, file_path: str):
 @shared_task()
 def cleanup():
     try:
-        delete_files_in_directory(current_app.config['UPLOAD_DIR_PATH'])
+        utils.delete_files_in_directory(current_app.config['UPLOAD_DIR_PATH'])
         return "Files deleted!"
     except Exception as e:
         current_app.logger.error(str(e))
