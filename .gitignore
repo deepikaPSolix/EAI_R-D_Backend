@@ -6,3 +6,5 @@ ml-model
 chroma.log
 venv
 cache
+*.log
+dist/
