@@ -31,40 +31,30 @@ class RAG:
         return reranked_docs
     
     def generate_prompt(self, user_role, curated_query):
-        access_instructions = ""
-        if user_role == "Doctor":
-            access_instructions = f"""
+        # access_instructions = f"""
 
-            Query: "{curated_query}"
-            
-            1. As a Doctor, you have complete access to all relevant medical details for patient care.
-              Respond with detailed information relevant to the query. Exclude sensitive information such as PII, 
-              financial details unless directly relevant to patient care.
-            
-            """
-            return access_instructions
+        # Query: "{curated_query}"
+        
+        # Use the retrieved data to provide a complete, accurate, and helpful response to the given query.
 
+        # - Focus on delivering clear, relevant, and detailed information directly related to the query.  
+        # - If some details are missing, provide the most accurate and informative answer possible based on the available data.  
+        # - Offer guidance or suggest next steps if the provided information may not fully address the query.
+        
+        # """
+        # return access_instructions
+    
+        return f"""
+        You are Solix AI Assistant, an AI assistant designed to help users analyze, interpret, and extract meaningful insights from the given data. Below is a user query along with relevant context retrieved from enterprise data sources via vector search. Use the context to generate a clear and accurate response.
 
-        elif user_role == "Patient":
-            access_instructions = f"""
+        Instructions:
+        Focus on delivering clear, relevant, and detailed information directly related to the query.  
+        If some details are missing, provide the most accurate and informative answer possible based on the available data.  
+        Offer guidance or suggest next steps if the provided information may not fully address the query.
 
-           Query: "{curated_query}"
-            As a Patient, you have access to a summary of relevant personal health information.
-            Respond with simplified information that helps you understand your health status.
-         """
-            return access_instructions
+        Query: "{curated_query}"
+        """
 
-        elif user_role == "Nurse":
-            access_instructions = f"""
-                Query: "{curated_query}"
-                As a Nurse, you are allowed to access a patient's medical records, including recent treatment updates, medication administration records, lab results, and daily care plans. 
-                Your role focuses on assisting with patient care, so the information provided should include practical details like treatment schedules, medication dosages, and patient progress notes. 
-                Exclude sensitive information such as in-depth diagnostic reports or financial details unless directly relevant to patient care.
-                """
-            return access_instructions
-
-        else:
-            return "Invalid user role."
 
     def process_user_query(self, query, access_level):
         data_chroma = self.crm.query_db(query_text= query, user_role=access_level, k=40)
