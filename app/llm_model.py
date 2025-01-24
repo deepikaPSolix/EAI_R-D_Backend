@@ -3,28 +3,45 @@ from langchain_ollama import ChatOllama
 from langchain_together import ChatTogether
 from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import PromptTemplate
+import logging
+import os
 
 class LLMModel:
-    def __init__(self, model_source:str = "ollama"):
-        if model_source == "together":
-             self.model = ChatTogether(temperature=0.1, model='meta-llama/Llama-3.3-70B-Instruct-Turbo-Free',)
-        else:
-            self.model = ChatOllama(temperature=0.1, model='llama3.1', base_url="http://192.168.1.116:11434")
+    def __init__(self, model_source: str = "ollama"):
+        self.model_source = model_source
+        self.model = self._initialize_model()
 
     @classmethod
-    def from_together(cls):
+    def from_together(cls) -> 'LLMModel':
         return cls("together")
 
     def _initialize_model(self):
-        model = ChatTogether(temperature=0.1, model='meta-llama/Llama-3.3-70B-Instruct-Turbo',)
-        # model = ChatOllama(temperature=0.1, model='llama3.1', base_url="http://192.168.1.116:11434")
-        self.model = model
+        if self.model_source == "together":
+            return ChatTogether(
+                temperature=0.1, 
+                model='meta-llama/Llama-3.3-70B-Instruct-Turbo-Free'
+            )
+        else:
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://192.168.1.116:11434")
+            return ChatOllama(
+                temperature=0.1, 
+                model='llama3.1', 
+                base_url=base_url,
+                format='json'
+            )
 
-    def infer_model(self, query, data_model) -> BaseModel:
+    def infer_model(self, query: str, data_model: BaseModel) -> BaseModel:
+        """
+        Infer the model with the given query and data model.
+        
+        :param query: The query string to be processed by the model.
+        :param data_model: The Pydantic model to parse the output.
+        :return: Parsed output as a Pydantic model.
+        """
         output_parser = PydanticOutputParser(pydantic_object=data_model)
         format_instructions = output_parser.get_format_instructions()
 
-        prompt = PromptTemplate(    
+        prompt = PromptTemplate(
             template="Answer the user query.\n{format_instructions}\n{query}\n",
             input_variables=["query"],
             partial_variables={"format_instructions": format_instructions},
@@ -34,4 +51,5 @@ class LLMModel:
             res = chain.invoke({"query": query})
             return res
         except Exception as e:
-            print(e)
+            logging.error(f"Error during model inference: {e}")
+            raise

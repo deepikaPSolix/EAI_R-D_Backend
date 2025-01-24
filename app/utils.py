@@ -1,6 +1,5 @@
-import os
-
 def delete_files_in_directory(directory_path):
+    import os
     try:
         # Loop through all items in the directory
         for item in os.listdir(directory_path):
@@ -15,6 +14,7 @@ def delete_files_in_directory(directory_path):
         print(f"An error occurred: {e}")
 
 def delete_files(file_paths: list):
+    import os
     for file_path in file_paths:
         try:
             if os.path.exists(file_path):
@@ -32,6 +32,8 @@ def is_audio_or_video_file(file_path):
     :param file_path: Path to the file.
     :return: True if the file is audio or video, False otherwise.
     """
+
+    import os
     # Supported audio and video extensions
     audio_extensions = {'.mp3', '.wav', '.aac', '.flac', '.ogg', '.m4a', '.wma', '.alac'}
     video_extensions = {'.mp4', '.avi', '.mkv', '.mov', '.flv', '.wmv', '.webm', '.mpeg', '.3gp'}
