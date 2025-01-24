@@ -19,6 +19,8 @@ RUN apt-get update && \
     apt-get -qq install -y --no-install-recommends \
     libmagic-dev \
     ffmpeg \
+    poppler-utils \
+    tesseract-ocr \
     libmagic1 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*  # Clean up APT when done to reduce image size
 
