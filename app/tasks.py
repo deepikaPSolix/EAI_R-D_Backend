@@ -40,7 +40,11 @@ def process_file_workflow(files: list):
         fileClusterEvaluationFunction.si(),
     )
 
-    final_workflow = chain(process_files_workflow, evaluation_workflow, cleanup.si())
+    final_workflow = chain(
+        process_files_workflow, 
+        evaluation_workflow, 
+        cleanup.si()
+    )
 
 
     final_workflow.apply_async()
@@ -52,8 +56,22 @@ def process_file_workflow(files: list):
 @shared_task(bind=True, max_retries=3, retry_backoff=False)
 def generate_labels(self, data: list):
     try:
+        current_app.logger.info(f"Initialised generate_labels")
+        if not isinstance(data, list):
+            data = [data]
         df = pd.DataFrame(data)
+        current_app.logger.info(f"Created df from data.")
         df.to_csv('cache/gen_labels.csv')
+
+        if len(df) < 10:
+            df["cluster"] = range(len(df))
+            label_generator = LabelGenerator()
+            labeled_data = label_generator.generate_labels(df[['file_name', 'cluster', 'chunks']])
+            labeled_data.to_csv('cache/labels.csv')
+            df['cluster_label'] = labeled_data['cluster_label']
+            df.to_csv('cache/result.csv')
+            return df.to_dict()
+
         clustering = Clustering()
         classification = Classification(model_path=current_app.config['ML_DIR_PATH'])
         label_generator = LabelGenerator()
@@ -114,7 +132,8 @@ def parse_file(self, file_path: str):
             chunks = generic_processor.process_file(file_path)
         attr_ext = DynamicExtractor()
         attr_res = attr_ext.extract_from_file(chunks)
-        return {'file_name' : file_name, 'file_type' : file_type, 'chunks': [chunk.text for chunk in chunks], 'data' : " | ".join([chunk.text for chunk in chunks]), 'attributes' : attr_res.model_dump(), "status": "success"}
+        current_app.logger.info(f"Extracted attributes from file. {attr_res.model_dump()}")
+        return {'file_name' : file_name, 'file_type' : file_type, 'chunks': [chunk.text for chunk in chunks], 'attributes' : attr_res.model_dump(), "status": "success"}
     except Exception as e:
         current_app.logger.error(str(e))
         try:
