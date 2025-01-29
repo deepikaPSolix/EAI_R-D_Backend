@@ -133,7 +133,7 @@ def parse_file(self, file_path: str):
         attr_ext = DynamicExtractor()
         attr_res = attr_ext.extract_from_file(chunks)
         current_app.logger.info(f"Extracted attributes from file. {attr_res.model_dump()}")
-        return {'file_name' : file_name, 'file_type' : file_type, 'chunks': [chunk.text for chunk in chunks], 'attributes' : attr_res.model_dump(), "status": "success"}
+        return {'file_name' : file_name, 'file_type' : file_type, 'chunks': [chunk.text for chunk in chunks], 'data' : " | ".join([chunk.text for chunk in chunks]), 'attributes' : attr_res.model_dump(), "status": "success"}
     except Exception as e:
         current_app.logger.error(str(e))
         try:
