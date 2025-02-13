@@ -22,10 +22,10 @@ class LLMModel:
                 model='meta-llama/Llama-3.3-70B-Instruct-Turbo-Free'
             )
         else:
-            base_url = os.getenv("OLLAMA_BASE_URL", "http://192.168.1.116:11434")
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://10.1.161.62:11434")
             return ChatOllama(
                 temperature=0.1, 
-                model='llama3.1', 
+                model='llama3.1:70b', 
                 base_url=base_url,
                 format='json'
             )

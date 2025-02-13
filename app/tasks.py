@@ -1,3 +1,4 @@
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -120,6 +121,7 @@ def insert_to_db(data):
 def parse_file(self, file_path: str):
     file_type = Path(file_path).suffix[1:]
     file_name = Path(file_path).name
+    file_size = utils.get_human_readable_file_size(file_path)
     try:
         if file_type == "mp3":
             audio_processor = AudioFileProcessor()
@@ -133,7 +135,16 @@ def parse_file(self, file_path: str):
         attr_ext = DynamicExtractor()
         attr_res = attr_ext.extract_from_file(chunks)
         current_app.logger.info(f"Extracted attributes from file. {attr_res.model_dump()}")
-        return {'file_name' : file_name, 'file_type' : file_type, 'chunks': [chunk.text for chunk in chunks], 'data' : " | ".join([chunk.text for chunk in chunks]), 'attributes' : attr_res.model_dump(), "status": "success"}
+        return {
+            'file_name' : file_name, 
+            'file_size': file_size, 
+            'file_type' : file_type, 
+            'chunks': [chunk.text for chunk in chunks], 
+            'data' : " | ".join([chunk.text for chunk in chunks]), 
+            'attributes' : attr_res.model_dump(), 
+            "status": "success", 
+            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
     except Exception as e:
         current_app.logger.error(str(e))
         try:

@@ -1,6 +1,6 @@
 import json
 import os
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, send_from_directory
 from openai import NotFoundError
 from celery.result import AsyncResult
 from app.chroma_db import ChromaDB
@@ -16,6 +16,20 @@ main = Blueprint('main', __name__)
 def home():
     current_app.logger.info("Welcome to EAI!!!")
     return "<p>Welcome to EAI!!!</p>"
+
+
+@main.route('/filecontents/<filename>', methods=["GET"])
+def serve_file(filename):
+    print("Hi")
+    print(filename)
+    if not filename:
+        print("Filename is required")
+        return jsonify({"error": "Filename is required"}), 400
+
+    try:
+        return send_from_directory(current_app.config['UPLOAD_DIR_PATH'], filename)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @main.route("/docs/uploadandtrain", methods=['POST'])
