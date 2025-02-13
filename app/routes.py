@@ -149,6 +149,9 @@ def fetch_docs():
         db = ChromaDB()
         res = db.get()
 
+        if not res:
+            res = []
+
         return jsonify({'documents': res, 'doc_updates': doc_updates})
     except NotFoundError as e:
         return jsonify({"error": str(e)}), 404
@@ -166,6 +169,7 @@ def update_docs():
             raise ValueError("Missing data in the request body")
         db = ChromaDB()
         res = db.update_documents(data)
+        doc_updates += 1
         return jsonify({'status': res, 'doc_updates': doc_updates})
 
     except ValueError as e:
@@ -182,7 +186,7 @@ def delete_docs():
         FILES_TO_CLEAR=["queryEvaluationScreen1Results.json","queryEvaluationScreen2Result.json", "sensitivityEvaluation.json", "fileAttributesResult.json","fileClusterResult.json"]
         file_paths = [os.path.join(current_app.config['BASE_DIR'], file_name) for file_name in FILES_TO_CLEAR]
         delete_files(file_paths)
-        doc_updates += 0
+        doc_updates = 0
         return jsonify({'status': "success"})
     except Exception as e:
         current_app.logger.error(str(e))

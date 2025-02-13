@@ -44,7 +44,6 @@ def process_file_workflow(files: list):
     final_workflow = chain(
         process_files_workflow, 
         evaluation_workflow, 
-        cleanup.si()
     )
 
 

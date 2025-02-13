@@ -7,7 +7,7 @@ import logging
 import os
 
 class LLMModel:
-    def __init__(self, model_source: str = "ollama"):
+    def __init__(self, model_source: str = "together"):
         self.model_source = model_source
         self.model = self._initialize_model()
 
