@@ -176,11 +176,13 @@ def update_docs():
     
 @main.route('/docs', methods=['DELETE'])
 def delete_docs():
+    global doc_updates
     try:
         ChromaDB().delete_all_docs()
         FILES_TO_CLEAR=["queryEvaluationScreen1Results.json","queryEvaluationScreen2Result.json", "sensitivityEvaluation.json", "fileAttributesResult.json","fileClusterResult.json"]
         file_paths = [os.path.join(current_app.config['BASE_DIR'], file_name) for file_name in FILES_TO_CLEAR]
         delete_files(file_paths)
+        doc_updates += 0
         return jsonify({'status': "success"})
     except Exception as e:
         current_app.logger.error(str(e))
