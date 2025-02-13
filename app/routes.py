@@ -10,6 +10,8 @@ from app.rag import RAG
 from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction
 from app.utils import delete_files
 
+doc_updates = 0
+
 main = Blueprint('main', __name__)
 
 @main.route("/")
@@ -142,11 +144,12 @@ def get_status(task_id):
 
 @main.route('/docs', methods = ["GET"])
 def fetch_docs():
+    global doc_updates
     try:
         db = ChromaDB()
         res = db.get()
 
-        return jsonify(res)
+        return jsonify({'documents': res, 'doc_updates': doc_updates})
     except NotFoundError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:
@@ -155,6 +158,7 @@ def fetch_docs():
 
 @main.route('/docs', methods=['PATCH'])
 def update_docs():
+    global doc_updates
     try:
         data = request.get_json()
         # Check if data is not None (i.e., the JSON body was valid)
@@ -162,7 +166,7 @@ def update_docs():
             raise ValueError("Missing data in the request body")
         db = ChromaDB()
         res = db.update_documents(data)
-        return jsonify({'status': res})
+        return jsonify({'status': res, 'doc_updates': doc_updates})
 
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
