@@ -28,4 +28,4 @@ langchain_ollama
 uuid6
 transformers
 sentence_transformers
-opik
+opik==1.3.5
