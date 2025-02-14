@@ -45,7 +45,8 @@ class ChromaDB:
                         'retention_time': row['attributes']['retention_time'],
                         'attributes':json.dumps(doc_attributes),
                         'file_size': row['file_size'],
-                        'created_at': row['created_at']
+                        'created_at': row['created_at'],
+                        'word_count': row['word_count']
                     }
                 )
             
@@ -109,7 +110,8 @@ class ChromaDB:
                     'retention_time' : result['metadatas'][ele].get('retention_time', "None"),
                     'file_size': result['metadatas'][ele].get('file_size', 0),
                     'created_at': result['metadatas'][ele].get('created_at', "None"),
-                    'attributes' : json.loads(result['metadatas'][ele]['attributes'])
+                    'attributes' : json.loads(result['metadatas'][ele]['attributes']),
+                    'word_count': result['metadatas'][ele].get('word_count', 0)
                 }
                 data.append(data_dict)
             return data
@@ -140,6 +142,7 @@ class ChromaDB:
                     'file_size': result['metadatas'][ele].get('file_size', 0),
                     'created_at': result['metadatas'][ele].get('created_at', "None"),
                     'attributes' : result['metadatas'][0][ele]['attributes'],
+                    "word_count": result['metadatas'][ele].get('word_count', 0)
                     
                 }
                 data.append(data_dict)

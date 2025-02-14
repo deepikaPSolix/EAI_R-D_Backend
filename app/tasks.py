@@ -134,6 +134,8 @@ def parse_file(self, file_path: str):
         attr_ext = DynamicExtractor()
         attr_res = attr_ext.extract_from_file(chunks)
         current_app.logger.info(f"Extracted attributes from file. {attr_res.model_dump()}")
+        data = " ".join([chunk.text for chunk in chunks])
+        word_count = len(data.split())
         return {
             'file_name' : file_name, 
             'file_size': file_size, 
@@ -142,7 +144,8 @@ def parse_file(self, file_path: str):
             'data' : " | ".join([chunk.text for chunk in chunks]), 
             'attributes' : attr_res.model_dump(), 
             "status": "success", 
-            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "word_count": word_count
         }
     except Exception as e:
         current_app.logger.error(str(e))
