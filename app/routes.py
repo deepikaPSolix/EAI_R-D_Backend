@@ -1,6 +1,6 @@
 import json
 import os
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, jsonify, request, Response
 from openai import NotFoundError
 from celery.result import AsyncResult
 from app.chroma_db import ChromaDB
@@ -9,6 +9,10 @@ from app.models.doc_file import DocFile
 from app.rag import RAG
 from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction
 from app.utils import delete_files
+from flask import request, jsonify, send_from_directory
+from app.graph_rag import GraphRAGProcessor
+import asyncio
+import nest_asyncio
 
 main = Blueprint('main', __name__)
 
@@ -281,3 +285,60 @@ def rag2EvalResults():
         print(f"Error fetching evaluation results: {e}")
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
     
+nest_asyncio.apply()
+@main.route("/graph/process", methods=["POST"])
+def process_graph():
+    try:
+        data = request.get_json()
+        processor = GraphRAGProcessor()
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        graph = loop.run_until_complete(
+            processor.build_graph( data["url"], data["domain"])
+        )
+        
+        visualization_path = processor.generate_visualization(graph)
+        processor.create_vector_store(graph)
+        
+        return jsonify({
+            "nodes": list(graph.nodes()),
+            "visualization": visualization_path
+        })
+        
+    except Exception as e:
+        current_app.logger.error(f"Graph processing failed: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+@main.route("/graph/query", methods=["POST"])
+def graph_query():
+    try:
+        data = request.get_json()
+        processor = GraphRAGProcessor()
+
+        # Load the vector store from disk before querying
+        processor.load_vector_store()
+
+        results = processor.query_graph(data["query"])
+        
+        return jsonify({
+            "results": results,
+            "count": len(results)
+        })
+    except Exception as e:
+        current_app.logger.error(f"Graph query failed: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
+    
+@main.route("/download", methods=['GET'])
+def serve_raw_html():
+    """Return the raw HTML content of graph_visualization.html."""
+    desktop_path = os.path.join(os.path.expanduser("~"), "Desktop", "graph_visualization.html")
+    
+    if os.path.exists(desktop_path):
+        with open(desktop_path, "r", encoding="utf-8") as file:
+            html_content = file.read()
+        return Response(html_content, mimetype="text/html")
+    else:
+        return Response("File not found", status=404)
