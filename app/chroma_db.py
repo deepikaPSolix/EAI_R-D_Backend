@@ -139,10 +139,10 @@ class ChromaDB:
                     'data_classifiers' : result['metadatas'][0][ele]['data_classifiers'],
                     'responsible_values' : result['metadatas'][0][ele]['responsible_values'],
                     'retention_time' : result['metadatas'][0][ele]['retention_time'],
-                    'file_size': result['metadatas'][ele].get('file_size', 0),
-                    'created_at': result['metadatas'][ele].get('created_at', "None"),
+                    'file_size': result['metadatas'][ele][0].get('file_size', 0),
+                    'created_at': result['metadatas'][0][ele].get('created_at', "None"),
                     'attributes' : result['metadatas'][0][ele]['attributes'],
-                    "word_count": result['metadatas'][ele].get('word_count', 0)
+                    "word_count": result['metadatas'][0][ele].get('word_count', 0)
                     
                 }
                 data.append(data_dict)
