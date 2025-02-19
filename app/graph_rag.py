@@ -19,12 +19,14 @@ from langchain.docstore.document import Document
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import FAISS
 from pyvis.network import Network
-from .llm_model import LLMModel  # Import your existing LLMModel
+from .llm_model import LLMModel  
+# from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+# from ratelimit import limits, sleep_and_retry
 
 class GraphRAGProcessor:
     def __init__(self):
         self.scrape_cache = {}
-        self.llm = LLMModel.from_together()  # Use your existing LLMModel setup
+        self.llm = LLMModel.from_together()  
         self.embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
         self.app = current_app._get_current_object()
         self.vectorstore = None
@@ -46,7 +48,6 @@ class GraphRAGProcessor:
             if path != "/" and path.endswith("/"):
                 path = path.rstrip("/")
             parsed = parsed._replace(path=path)
-            current_app.logger.debug(f"Canonicalized URL: {url} -> {parsed.geturl()}")
             return parsed.geturl()
         except Exception as e:
             current_app.logger.error(f"URL canonicalization failed: {str(e)}")
@@ -55,10 +56,7 @@ class GraphRAGProcessor:
     async def _scrape_website(self, url, session, retries=3, timeout=10):
         """Cached async scraper with enhanced error handling"""
         if url in self.scrape_cache:
-            current_app.logger.debug(f"Using cached content for {url}")
             return self.scrape_cache[url]
-
-        error = None
         for attempt in range(retries):
             try:
                 headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
@@ -111,7 +109,6 @@ class GraphRAGProcessor:
                 )
                 await asyncio.sleep(1)
 
-        current_app.logger.error(f"Permanently failed to scrape {url}")
         result = ([], "")
         self.scrape_cache[url] = result
         return result
@@ -119,7 +116,6 @@ class GraphRAGProcessor:
     async def build_graph(self, start_url: str, allowed_domain: str) -> Tuple[nx.DiGraph, List[tuple]]:
         """Build website graph with proper logging and error handling"""
         graph = nx.DiGraph()
-        edge_urls = []
 
         try:
             connector = aiohttp.TCPConnector(ssl=self.ssl_context)
@@ -141,7 +137,6 @@ class GraphRAGProcessor:
                     
                     graph.add_node(level_1_label, text=link_text)
                     graph.add_edge(root_label, level_1_label)
-                    edge_urls.append((root_label, link))
 
                     # Process second layer
                     second_layer_links = self._filter_product_links(
@@ -155,7 +150,6 @@ class GraphRAGProcessor:
                         
                         graph.add_node(level_2_label, text=second_text)
                         graph.add_edge(level_1_label, level_2_label)
-                        edge_urls.append((level_1_label, second_link))
 
         except Exception as e:
             current_app.logger.error(
@@ -167,17 +161,16 @@ class GraphRAGProcessor:
             raise
 
         return graph
-    
     def generate_visualization(self, graph: nx.DiGraph) -> str:
             try:
-                net = Network(height="800px", width="100%", directed=True, bgcolor="#1E1E1E", font_color="#FFFFFF")       
+                net = Network(height="800px", width="100%", directed=True,  font_color="#333333")       
                 net.set_options("""
-        var options = {
+         var options = {
           "nodes": {
             "shape": "dot",
-            "size": 25,
+            "size": 20,
             "font": {
-              "size": 16,
+              "size": 14,
               "face": "arial",
               "strokeWidth": 2
             },
@@ -237,64 +230,86 @@ class GraphRAGProcessor:
         }
         """)
                 node_data = list(graph.nodes(data=True))
+                current_app.logger.info("asdasd@@@@", node_data)
                 texts = [data.get("text", "") for _, data in node_data]
+                summaries = self._generate_ordered_summaries(node_data)
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-                    # Map wrapped functions with preserved context
-                    futures = [
-                        executor.submit(self._generate_summary_wrapper(text))
-                        for text in texts
-                    ]
-                    
-                    summaries = []
-                    for future in concurrent.futures.as_completed(futures):
-                        try:
-                            summary = future.result()
-                            summaries.append(summary)
-                        except Exception as e:
-                            self.app.logger.error(f"Summary failed: {str(e)}")
-                            summaries.append("Summary error")
-
-                # Add nodes with summaries
-                for (node_label, _), summary in zip(node_data, summaries):
+        # Add nodes with their corresponding summaries
+                for idx, (node_label, data) in enumerate(node_data):
+                    summary = summaries[idx]
                     wrapped_text = "\n".join(textwrap.wrap(summary, width=40))
-                    net.add_node(node_label, 
-                                label=node_label,
-                                title=wrapped_text,
-                                color=self._node_color(node_label))
-                    self.app.logger.debug(f"Added node: {node_label}")
+                    
+                    net.add_node(
+                        node_label,
+                        label=node_label,
+                        title=wrapped_text,
+                        color=self._node_color(node_label),
+                        
+                    )
+                    current_app.logger.debug(f"Added node: {node_label}")
 
             
                 for edge in graph.edges():
                     net.add_edge(edge[0], edge[1])
-                desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
-                output_path = os.path.join(desktop_path, "graph_visualization.html")
-            
-            # Ensure the directory exists
-                os.makedirs(os.path.dirname(output_path), exist_ok=True)
-                net.write_html(output_path)  # Save the visualization to the specified path
+                temp_file_path = "temp_graph_visualization.html"
+                net.write_html(temp_file_path)
+                with open(temp_file_path, "r", encoding="utf-8") as file:
+                    html_content = file.read()
 
-                current_app.logger.info(f"Visualization generated at {output_path}")
-                return output_path
+                return html_content
 
             except Exception as e:
                 current_app.logger.error(f"Visualization failed: {str(e)}")
                 raise
+    def _generate_ordered_summaries(self, node_data: List[Tuple[str, dict]]) -> List[str]:
+        node_texts = [data.get("text", "") for _, data in node_data]
+        # Create a mapping of futures to their original indices
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+            future_to_index = {
+                executor.submit(self._generate_summary_wrapper(text)): idx
+                for idx, text in enumerate(node_texts)
+            }
+            
+            # Initialize list with correct size
+            summaries = [None] * len(node_texts)
+            
+            # Process completed futures
+            for future in concurrent.futures.as_completed(future_to_index):
+                idx = future_to_index[future]
+                try:
+                    summaries[idx] = future.result()
+                except Exception as e:
+                    current_app.logger.error(f"Summary failed for node {idx}: {str(e)}")
+                    summaries[idx] = "Summary unavailable"
+                    
+        return summaries           
+    # @retry(stop=stop_after_attempt(2),
+    #        wait=wait_exponential(multiplier=1, min=1, max=10),
+    #        retry=retry_if_exception(lambda e: 'rate_limit' in str(e)))
+    # @sleep_and_retry
+    # @limits(calls=60, period=60)
+    def _invoke_together_api(self, prompt):
+        return self.llm.model.invoke(prompt).content.strip()
 
     def _generate_summary(self, text: str) -> str:
+        """Generate summary with proper error handling and logging"""
+        current_app.logger.info('Generating summary for text')
         
-        current_app.logger.info('TEXT RECIEVED $$$$$$$$$$@$#@##@#@#')
-        """Use LLMModel to generate summaries"""
         if not text.strip():
-            current_app.logger.info("NO CONTENT AVAILABLE!@@!@!#!#")
+            current_app.logger.info('Empty text received')
             return "No content available"
-        prompt = f"Summarize this in one line:\n{text}\nSummary:"
-       
+        
         try:
-            prompt = f"Summarize this in one line:\n{text}\nSummary:"
+            prompt = f"""
+            Summarize this text in exactly one line, making it clear and concise:
+            {text}
+            Summary:
+            """
+            
             response = self.llm.model.invoke(prompt).content.strip()
-            current_app.logger.info(f"Generated Summary: {response}")
+            current_app.logger.info(f'Generated summary: {response}')
             return response
+            
         except Exception as e:
             current_app.logger.error(f"Summary generation failed: {str(e)}")
             return "Summary unavailable"
@@ -395,4 +410,3 @@ class GraphRAGProcessor:
 
     def _node_color(self, label: str) -> str:
         return f"#{hash(label) % 0xFFFFFF:06x}"
-    

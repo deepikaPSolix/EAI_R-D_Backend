@@ -295,17 +295,16 @@ def process_graph():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         
+        #level = data.get("depth", 0) 
         graph = loop.run_until_complete(
-            processor.build_graph( data["url"], data["domain"])
+            processor.build_graph(data["url"], data["domain"])
         )
         
-        visualization_path = processor.generate_visualization(graph)
-        processor.create_vector_store(graph)
+        html_content = processor.generate_visualization(graph)  
         
-        return jsonify({
-            "nodes": list(graph.nodes()),
-            "visualization": visualization_path
-        })
+        processor.create_vector_store(graph)
+
+        return Response(html_content, mimetype="text/html")  
         
     except Exception as e:
         current_app.logger.error(f"Graph processing failed: {str(e)}")
@@ -316,8 +315,6 @@ def graph_query():
     try:
         data = request.get_json()
         processor = GraphRAGProcessor()
-
-        # Load the vector store from disk before querying
         processor.load_vector_store()
 
         results = processor.query_graph(data["query"])
@@ -329,16 +326,3 @@ def graph_query():
     except Exception as e:
         current_app.logger.error(f"Graph query failed: {str(e)}")
         return jsonify({"error": str(e)}), 500
-
-    
-@main.route("/download", methods=['GET'])
-def serve_raw_html():
-    """Return the raw HTML content of graph_visualization.html."""
-    desktop_path = os.path.join(os.path.expanduser("~"), "Desktop", "graph_visualization.html")
-    
-    if os.path.exists(desktop_path):
-        with open(desktop_path, "r", encoding="utf-8") as file:
-            html_content = file.read()
-        return Response(html_content, mimetype="text/html")
-    else:
-        return Response("File not found", status=404)
