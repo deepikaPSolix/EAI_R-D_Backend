@@ -43,3 +43,11 @@ def is_audio_or_video_file(file_path):
     ext = ext.lower()
 
     return ext in audio_extensions or ext in video_extensions
+
+
+def get_human_readable_file_size(file_path):
+    """Returns the file size in kilobytes (KB) with two decimal places."""
+    import os
+    size_in_bytes = os.path.getsize(file_path)
+    size_in_kb = size_in_bytes / 1024  # Convert to kilobytes
+    return f"{size_in_kb:.2f} KB"

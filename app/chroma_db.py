@@ -44,6 +44,9 @@ class ChromaDB:
                         'file_name': doc_name,
                         'retention_time': row['attributes']['retention_time'],
                         'attributes':json.dumps(doc_attributes),
+                        'file_size': row['file_size'],
+                        'created_at': row['created_at'],
+                        'word_count': row['word_count']
                     }
                 )
             
@@ -55,14 +58,32 @@ class ChromaDB:
 
     
     def update_documents(self, data_dict):
-        ids = [d['id'] for d in data_dict]
-        documents = [d['data'] for d in data_dict]
-        metadatas = [{'label':d['label'], 'sensitivity': int(d['sensitivity']), 'attributes':json.dumps(d['attributes'])} for d in data_dict]
+
+        ids = [d["id"] for d in data_dict]
+        documents = [d["data"] for d in data_dict]
+
+        metadatas = []
+        for d in data_dict:
+            attrs = d.get("attributes", {})
+     
+            if "reason_for_change" in d:
+                attrs["reason_for_change"] = d["reason_for_change"]
+            
+            metadatas.append({
+                "label": d.get("label", ""),
+                "sensitivity": int(d.get("sensitivity", 1)),
+                "data_classifiers": d.get("data_classifiers", ""),
+                "responsible_values": d.get("responsible_values", ""),
+                "file_name": d.get("file_name", ""),
+                "retention_time": d.get("retention_time", ""),
+                "attributes": json.dumps(d.get("attributes", {})),
+            })
+
         try:
-            res = self.collection.upsert(
-                ids = ids,
+            self.collection.upsert(
+                ids=ids,
                 documents=documents,
-                metadatas = metadatas
+                metadatas=metadatas
             )
             return True
         except Exception as e:
@@ -87,7 +108,10 @@ class ChromaDB:
                     'data_classifiers': result['metadatas'][ele].get('data_classifiers', ""),
                     'responsible_values': result['metadatas'][ele].get('responsible_values', 'None'),
                     'retention_time' : result['metadatas'][ele].get('retention_time', "None"),
-                    'attributes' : json.loads(result['metadatas'][ele]['attributes'])
+                    'file_size': result['metadatas'][ele].get('file_size', 0),
+                    'created_at': result['metadatas'][ele].get('created_at', "None"),
+                    'attributes' : json.loads(result['metadatas'][ele]['attributes']),
+                    'word_count': result['metadatas'][ele].get('word_count', 0)
                 }
                 data.append(data_dict)
             return data
@@ -115,7 +139,10 @@ class ChromaDB:
                     'data_classifiers' : result['metadatas'][0][ele]['data_classifiers'],
                     'responsible_values' : result['metadatas'][0][ele]['responsible_values'],
                     'retention_time' : result['metadatas'][0][ele]['retention_time'],
+                    'file_size': result['metadatas'][ele][0].get('file_size', 0),
+                    'created_at': result['metadatas'][0][ele].get('created_at', "None"),
                     'attributes' : result['metadatas'][0][ele]['attributes'],
+                    "word_count": result['metadatas'][0][ele].get('word_count', 0)
                     
                 }
                 data.append(data_dict)

@@ -1,6 +1,6 @@
 import json
 import os
-from flask import Blueprint, current_app, jsonify, request, Response
+from flask import Blueprint, current_app, jsonify, request, send_from_directory, Response
 from openai import NotFoundError
 from celery.result import AsyncResult
 from app.chroma_db import ChromaDB
@@ -14,12 +14,28 @@ from app.graph_rag import GraphRAGProcessor
 import asyncio
 import nest_asyncio
 
+doc_updates = 0
+
 main = Blueprint('main', __name__)
 
 @main.route("/")
 def home():
     current_app.logger.info("Welcome to EAI!!!")
     return "<p>Welcome to EAI!!!</p>"
+
+
+@main.route('/filecontents/<filename>', methods=["GET"])
+def serve_file(filename):
+    print("Hi")
+    print(filename)
+    if not filename:
+        print("Filename is required")
+        return jsonify({"error": "Filename is required"}), 400
+
+    try:
+        return send_from_directory(current_app.config['UPLOAD_DIR_PATH'], filename)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @main.route("/docs/uploadandtrain", methods=['POST'])
@@ -132,11 +148,15 @@ def get_status(task_id):
 
 @main.route('/docs', methods = ["GET"])
 def fetch_docs():
+    global doc_updates
     try:
         db = ChromaDB()
         res = db.get()
 
-        return jsonify(res)
+        if not res:
+            res = []
+
+        return jsonify({'documents': res, 'doc_updates': doc_updates})
     except NotFoundError as e:
         return jsonify({"error": str(e)}), 404
     except Exception as e:
@@ -145,6 +165,7 @@ def fetch_docs():
 
 @main.route('/docs', methods=['PATCH'])
 def update_docs():
+    global doc_updates
     try:
         data = request.get_json()
         # Check if data is not None (i.e., the JSON body was valid)
@@ -152,7 +173,8 @@ def update_docs():
             raise ValueError("Missing data in the request body")
         db = ChromaDB()
         res = db.update_documents(data)
-        return jsonify({'status': res})
+        doc_updates += 1
+        return jsonify({'status': res, 'doc_updates': doc_updates})
 
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
@@ -162,11 +184,13 @@ def update_docs():
     
 @main.route('/docs', methods=['DELETE'])
 def delete_docs():
+    global doc_updates
     try:
         ChromaDB().delete_all_docs()
         FILES_TO_CLEAR=["queryEvaluationScreen1Results.json","queryEvaluationScreen2Result.json", "sensitivityEvaluation.json", "fileAttributesResult.json","fileClusterResult.json"]
         file_paths = [os.path.join(current_app.config['BASE_DIR'], file_name) for file_name in FILES_TO_CLEAR]
         delete_files(file_paths)
+        doc_updates = 0
         return jsonify({'status': "success"})
     except Exception as e:
         current_app.logger.error(str(e))
