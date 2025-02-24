@@ -105,7 +105,7 @@ def query_rag():
 
         return jsonify({"response": res[0], "curated_query": res[1], "files": res[2]})
     except Exception as e:
-        current_app.logger.error(str(e))
+        current_app.logger.error(str(e), exc_info=True)
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     
 

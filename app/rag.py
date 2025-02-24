@@ -1,3 +1,4 @@
+from flask import current_app
 from app.chroma_db import ChromaDB
 from app.llm_model import LLMModel
 from langchain.prompts import PromptTemplate

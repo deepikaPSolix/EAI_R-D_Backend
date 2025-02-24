@@ -139,7 +139,7 @@ class ChromaDB:
                     'data_classifiers' : result['metadatas'][0][ele]['data_classifiers'],
                     'responsible_values' : result['metadatas'][0][ele]['responsible_values'],
                     'retention_time' : result['metadatas'][0][ele]['retention_time'],
-                    'file_size': result['metadatas'][ele][0].get('file_size', 0),
+                    'file_size': result['metadatas'][0][ele].get('file_size', 0),
                     'created_at': result['metadatas'][0][ele].get('created_at', "None"),
                     'attributes' : result['metadatas'][0][ele]['attributes'],
                     "word_count": result['metadatas'][0][ele].get('word_count', 0)
@@ -148,7 +148,7 @@ class ChromaDB:
                 data.append(data_dict)
             return data
         except Exception as e:
-            print("[update_documents] Exception - " + str(e))
+            current_app.logger.error(str(e), exc_info=True)
 
     def delete_all_docs(self):
         try:
