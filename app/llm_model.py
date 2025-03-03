@@ -19,10 +19,10 @@ class LLMModel:
         if self.model_source == "together":
             return ChatTogether(
                 temperature=0.1, 
-                model='meta-llama/Llama-3.3-70B-Instruct-Turbo-Free'
+                model='meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo'
             )
         else:
-            base_url = os.getenv("OLLAMA_BASE_URL", "http://10.1.161.62:11434")
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://10.1.161.62:11435")
             return ChatOllama(
                 temperature=0.1, 
                 model='llama3.1:70b', 

@@ -46,4 +46,4 @@ RUN mkdir -p $NLTK_DATA && python -m nltk.downloader -d $NLTK_DATA punkt punkt_t
 EXPOSE 5000
 
 # Run app.py when the container launches
-CMD ["flask", "run", "--host=0.0.0.0"]
+CMD ["flask", "run", "--host=0.0.0.0", "--with-threads"]
