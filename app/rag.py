@@ -8,9 +8,11 @@ from flashrank import Ranker, RerankRequest
 
 
 class RAG:
-    def __init__(self, chroma_db: ChromaDB):
+    def __init__(self, chroma_db: ChromaDB,model_source:str):
         self.crm = chroma_db
-        self.model = LLMModel.from_together().model
+        self.model = LLMModel(model_source).model
+        current_app.logger.info(f"Model source is {model_source}")
+        
         
     def query_rewriting(self, query):
         imp_instructions = f'''

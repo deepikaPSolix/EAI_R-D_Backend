@@ -96,7 +96,8 @@ def query_rag():
         if data is None:
             raise ValueError("Missing data in the request body")
 
-        rag = RAG(ChromaDB()) 
+        rag = RAG(ChromaDB(),model_source=data['model_name']) 
+
         res = rag.process_user_query(data['query'], data["access_level"])
        
         combinedList=[res[1],res[0],res[3],data["query"]]
@@ -116,7 +117,7 @@ def query_rag2():
         if data is None:
             raise ValueError("Missing data in the request body")
 
-        rag = RAG(ChromaDB())
+        rag = RAG(ChromaDB(),model_source=data['model_name'])
         res,curated_query,top_reranked_docs = rag.process_user_query_screen2(data['query'], data["access_level"], data["user_role"])
 
         formatted_data = [
