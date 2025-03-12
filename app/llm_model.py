@@ -1,19 +1,28 @@
+from flask import current_app
 from pydantic import BaseModel
 from langchain_ollama import ChatOllama
 from langchain_together import ChatTogether
+from langchain_openai import ChatOpenAI
 from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import PromptTemplate
-import logging
 import os
-
 class LLMModel:
-    def __init__(self, model_source: str = "together"):
+    def __init__(self, model_source: str = "openai", json_mode: bool = False):
         self.model_source = model_source
+        self.json_mode = json_mode
         self.model = self._initialize_model()
 
     @classmethod
     def from_together(cls) -> 'LLMModel':
         return cls("together")
+    
+    @classmethod
+    def from_openai(cls) -> 'LLMModel':
+        return cls("openai")
+
+    @classmethod
+    def from_ollama(cls) -> 'LLMModel':
+        return cls("ollama")
 
     def _initialize_model(self):
         if self.model_source == "together":
@@ -21,13 +30,19 @@ class LLMModel:
                 temperature=0.1, 
                 model='meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo'
             )
+        elif self.model_source == "openai":
+            return ChatOpenAI(
+                temperature=0.1, 
+                model="gpt-4o-mini",
+                openai_api_key=os.getenv("OPENAI_API_KEY"),
+            )
         else:
-            base_url = os.getenv("OLLAMA_BASE_URL", "http://10.1.161.62:11435")
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://10.1.161.62:11434")
             return ChatOllama(
                 temperature=0.1, 
                 model='llama3.1:70b', 
                 base_url=base_url,
-                format='json'
+                format='json' if self.json_mode else ""
             )
 
     def infer_model(self, query: str, data_model: BaseModel) -> BaseModel:
@@ -51,5 +66,4 @@ class LLMModel:
             res = chain.invoke({"query": query})
             return res
         except Exception as e:
-            logging.error(f"Error during model inference: {e}")
-            raise
+            current_app.logger.error(f"Error during model inference: {e}", exc_info=True)
