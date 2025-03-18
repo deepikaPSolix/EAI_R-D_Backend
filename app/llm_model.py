@@ -7,7 +7,7 @@ from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import PromptTemplate
 import os
 class LLMModel:
-    def __init__(self, model_source: str = "openai", json_mode: bool = False):
+    def __init__(self, model_source: str = "together", json_mode: bool = False):
         self.model_source = model_source
         self.json_mode = json_mode
         self.model = self._initialize_model()
