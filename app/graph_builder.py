@@ -16,7 +16,7 @@ class GraphBuilder:
     def __init__(self,data_dir: str = "data"):
         self.visited = {}
         self.edges = []
-        self.data_dir = data_dir  # Initialize data_dir
+        self.data_dir = data_dir  
         os.makedirs(self.data_dir, exist_ok=True)
         self.session = None
         self._initialize_data_dir()

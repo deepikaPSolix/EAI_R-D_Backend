@@ -66,7 +66,6 @@ class GraphProcessor:
         response = self.llm.model.invoke(prompt,max_tokens=1024).content.strip()
         return response
 
-    # Helper methods
     def _create_text_units(self, visited):
         text_units = []
         for url, text in visited.items():
@@ -129,9 +128,8 @@ class GraphProcessor:
         index = faiss.IndexFlatL2(embeddings.shape[1])
         index.add(np.array(embeddings).astype("float32"))
         return index
-    # Community Summary: {comm_summary}
     def _format_prompt(self, query, product_links, retrieved_texts):
-        max_input_length = 6000  # Setting a limit so inputs + response stay below 8193
+        max_input_length = 6000
         trimmed_texts = retrieved_texts[:max_input_length]
         
         prompt = (
@@ -159,7 +157,6 @@ class GraphProcessor:
 
     def _visualize_graph_static(self, G, output_file="graph_static.html"):
         """Generate interactive graph visualization with custom JS"""
-        # Create network
         num_nodes = len(G.nodes)
         if num_nodes <= 50:
             spring_length = 200
@@ -208,7 +205,6 @@ class GraphProcessor:
     }}
     """)
 
-        # Add nodes with custom styling
         for node, data in G.nodes(data=True):
             x = pos[node][0] * 1000
             y = pos[node][1] * 1000
@@ -234,23 +230,15 @@ class GraphProcessor:
                 shadow=True, 
                 href=url
             )
-
-        # Add edges
-        # for source, target in G.edges():
-        #     net.add_edge(source, target)
         for edge in G.edges(data=True):
             source, target, edge_data = edge
             weight = edge_data.get("weight", 1)
             edge_color = "#%06x" % random.randint(0, 0xFFFFFF)
             net.add_edge(source, target, color=edge_color, width=weight * 0.5, 
                         arrowsize=0.3, smooth=True, dashes=random.choice([True, False]))
-        # Generate HTML
         output_path = os.path.join(self.builder.data_dir, output_file)
         net.save_graph(output_path)
-
-        # Add custom JavaScript
         self._add_custom_js(output_path)
-        
         return self._read_html(output_path)
     def get_last_retrieved_sources(self):
         """Get sources from last query"""
