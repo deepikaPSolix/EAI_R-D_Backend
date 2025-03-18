@@ -21,8 +21,13 @@ RUN apt-get update && \
     ffmpeg \
     poppler-utils \
     tesseract-ocr \
-    libmagic1 && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*  # Clean up APT when done to reduce image size
+    libmagic1 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libatspi2.0-0 \
+    libxcomposite1 \
+    libxdamage1 && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Copy only the requirements file first to leverage Docker cache
 COPY requirements.txt /myapp/
@@ -30,7 +35,9 @@ COPY requirements.txt /myapp/
 # Install dependencies before copying the rest of the code
 # This step will be cached as long as requirements.txt doesn't change
 RUN pip install --no-cache-dir -r requirements.txt
-
+RUN playwright install-deps
+RUN playwright install
+RUN python -m spacy download en_core_web_sm
 # Copy obfuscated files from the builder stage
 COPY --from=builder /myapp/dist /myapp/
 
@@ -42,7 +49,7 @@ COPY celery_worker.py /myapp/
 ENV NLTK_DATA=/usr/share/nltk_data
 RUN mkdir -p $NLTK_DATA && python -m nltk.downloader -d $NLTK_DATA punkt punkt_tab averaged_perceptron_tagger_eng
 
-# Expose port 5000 for the Flask app
+# Expose port 5000 for the Flask appgenera
 EXPOSE 5000
 
 # Run app.py when the container launches
