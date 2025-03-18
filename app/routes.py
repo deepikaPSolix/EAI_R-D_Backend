@@ -4,13 +4,17 @@ from flask import Blueprint, current_app, jsonify, request, send_from_directory,
 from openai import NotFoundError
 from celery.result import AsyncResult
 from app.chroma_db import ChromaDB
+from app.graph_builder import GraphBuilder
+from app.graph_rag import GraphProcessor
+# from app.graph_test import GraphRAGSystem
 from app.cluster_classify import ClusterAndClassify
 from app.models.doc_file import DocFile
 from app.rag import RAG
 from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction
 from app.utils import delete_files
 from flask import request, jsonify, send_from_directory
-from app.graph_rag import GraphRAGProcessor
+from langchain.vectorstores import FAISS
+from typing import Dict
 import asyncio
 import nest_asyncio
 
@@ -311,43 +315,51 @@ def rag2EvalResults():
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
     
 nest_asyncio.apply()
+
+data_dir = os.path.join(os.path.dirname(__file__), "data")
+builder = GraphBuilder(data_dir=data_dir)  # Single instance for data consistency
+processor = GraphProcessor(builder)
 @main.route("/graph/process", methods=["POST"])
 def process_graph():
     try:
         data = request.get_json()
-        processor = GraphRAGProcessor()
-        
+        if not data or "url" not in data:
+            return jsonify({"error": "URL required"}), 400
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        
-        #level = data.get("depth", 0) 
-        graph = loop.run_until_complete(
-            processor.build_graph(data["url"], data["domain"])
-        )
-        
-        html_content = processor.generate_visualization(graph)  
-        
-        processor.create_vector_store(graph)
-
-        return Response(html_content, mimetype="text/html")  
-        
+        visited, _ = loop.run_until_complete(
+            builder.crawl_website(data["url"], data.get("depth",1)))
+        html_content = processor.process_scraped_data(visited)
+        print("🛠 DEBUG: HTML Content:", html_content[:500])
+        return Response(html_content, mimetype="text/html")
     except Exception as e:
-        current_app.logger.error(f"Graph processing failed: {str(e)}")
+        current_app.logger.error(f"Processing error: {str(e)}",exc_info=True)
         return jsonify({"error": str(e)}), 500
+
 
 @main.route("/graph/query", methods=["POST"])
 def graph_query():
     try:
         data = request.get_json()
-        processor = GraphRAGProcessor()
-        processor.load_vector_store()
-
-        results = processor.query_graph(data["query"])
+        if not data or "query" not in data:
+            return jsonify({"error": "Query parameter required"}), 400
+        if not builder.load_scraped_data():
+            return jsonify({"error": "No processed data available - run /graph/process first"}), 400
+        # Get LLM response
+        response = processor.query_graph(data["query"])
+        response_text = ""
+        link_text = ""
+        for line in response.splitlines():
+            if line.startswith("Response:"):
+                response_text = line[len("Response:"):].strip()
+            elif line.startswith("Source_Link:"):
+                link_text = line[len("Source_Link:"):].strip()
         
         return jsonify({
-            "results": results,
-            "count": len(results)
+            "response": response_text,
+            "link": link_text
         })
     except Exception as e:
-        current_app.logger.error(f"Graph query failed: {str(e)}")
+        current_app.logger.error(f"Graph query error: {str(e)}",exc_info=True)
         return jsonify({"error": str(e)}), 500

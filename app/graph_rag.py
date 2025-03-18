@@ -1,412 +1,288 @@
-# graph_rag.py
-import asyncio
 import json
-import io
-import os
-import ssl
-import time
-import textwrap
-from urllib.parse import urlparse, urljoin
-from typing import List, Tuple
+import random
+import spacy
 import networkx as nx
-import aiohttp
-from bs4 import BeautifulSoup
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
-import concurrent.futures
-from flask import current_app, copy_current_request_context
-from langchain.docstore.document import Document
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
+import igraph as ig
+import leidenalg
+import numpy as np
+import faiss
+import os
+from urllib.parse import urlparse
+from app.graph_builder import GraphBuilder
+from app.llm_model import LLMModel
+from sentence_transformers import SentenceTransformer
 from pyvis.network import Network
-from .llm_model import LLMModel  
-# from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
-# from ratelimit import limits, sleep_and_retry
+from typing import Dict, List
+import logging
+logger = logging.getLogger(__name__)
+class GraphProcessor:
+    def __init__(self, builder: GraphBuilder):
+        if not hasattr(builder, 'data_dir'):
+            raise ValueError("GraphBuilder must be initialized with data_dir")
+        self.builder=builder
+        self.nlp = spacy.load("en_core_web_sm")
+        self.st_model = SentenceTransformer("all-MiniLM-L6-v2")
+        self.llm = LLMModel.from_together()
+        self.index = None
+        self.builder=builder
+        self.text_units = []
+        self.last_retrieved = []
+        self.communities = {}
+        self.community_summaries = {}
 
-class GraphRAGProcessor:
-    def __init__(self):
-        self.scrape_cache = {}
-        self.llm = LLMModel.from_together()  
-        self.embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        self.app = current_app._get_current_object()
-        self.vectorstore = None
-        self.ssl_context = ssl.create_default_context()
-        self.ssl_context.check_hostname = False
-        self.ssl_context.verify_mode = ssl.CERT_NONE
-    def _generate_summary_wrapper(self, text):
-        """Wrapper to preserve app context across threads"""
-        def _context_aware_generation():
-            with self.app.app_context():
-                return self._generate_summary(text)
-        return _context_aware_generation
-    def _canonicalize_url(self, url):
-        """Normalize URL format with proper logging"""
-        try:
-            parsed = urlparse(url)
-            parsed = parsed._replace(fragment="")
-            path = parsed.path
-            if path != "/" and path.endswith("/"):
-                path = path.rstrip("/")
-            parsed = parsed._replace(path=path)
-            return parsed.geturl()
-        except Exception as e:
-            current_app.logger.error(f"URL canonicalization failed: {str(e)}")
-            return url
+    def process_scraped_data(self, visited: Dict):
 
-    async def _scrape_website(self, url, session, retries=3, timeout=10):
-        """Cached async scraper with enhanced error handling"""
-        if url in self.scrape_cache:
-            return self.scrape_cache[url]
-        for attempt in range(retries):
-            try:
-                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-                async with session.get(
-                    url,
-                    headers=headers,
-                    timeout=timeout,
-                    ssl=self.ssl_context
-                ) as response:
-                    if response.status != 200:
-                        current_app.logger.warning(
-                            f"HTTP {response.status} for {url} (attempt {attempt+1}/{retries})"
-                        )
-                        continue
+        visited = self.builder.load_scraped_data()
+        if not visited:
+            raise ValueError("No scraped data available - run processing first")
+        self.text_units = self._create_text_units(visited)
 
-                    content_type = response.headers.get('Content-Type', '')
-                    if "text/html" not in content_type:
-                        current_app.logger.info(f"Skipping non-HTML content at {url}")
-                        result = ([], "")
-                        self.scrape_cache[url] = result
-                        return result
-
-                    text = await response.text()
-                    soup = BeautifulSoup(text, "html.parser")
-
-                    # Text extraction
-                    paragraphs = " ".join(p.get_text(strip=True) for p in soup.find_all("p"))
-                    headers_text = " ".join(
-                        h.get_text(strip=True) for h in soup.find_all(["h1", "h2", "h3"])
-                    )
-                    page_text = f"{paragraphs} {headers_text}".strip()
-
-                    # Link processing
-                    raw_links = [a['href'] for a in soup.find_all("a", href=True)]
-                    links = [self._canonicalize_url(urljoin(url, link)) for link in raw_links]
-                    links = list(dict.fromkeys(links))  # Deduplicate
-
-                    result = (links, page_text)
-                    self.scrape_cache[url] = result
-                    current_app.logger.info(f"Successfully scraped {url}")
-                    return result
-
-            except Exception as e:
-                error = e
-                current_app.logger.error(
-                    f"\n🔴 Scrape Error ({attempt+1}/{retries}): {url}\n"
-                    f"Error Type: {type(e).__name__}\n"
-                    f"Details: {str(e)}\n"
-                    f"{'-'*40}"
-                )
-                await asyncio.sleep(1)
-
-        result = ([], "")
-        self.scrape_cache[url] = result
-        return result
-
-    async def build_graph(self, start_url: str, allowed_domain: str) -> Tuple[nx.DiGraph, List[tuple]]:
-        """Build website graph with proper logging and error handling"""
-        graph = nx.DiGraph()
-
-        try:
-            connector = aiohttp.TCPConnector(ssl=self.ssl_context)
-            async with aiohttp.ClientSession(connector=connector) as session:
-                current_app.logger.info(f"\n🌐 Starting graph build for {start_url}\n")
-
-                # Initial scrape
-                base_links, base_text = await self._scrape_website(start_url, session)
-                root_label = self._extract_node_label(start_url, 0)
-                graph.add_node(root_label, text=base_text)
-
-                # Process product links
-                product_links = self._filter_product_links(
-                    self._filter_links(base_links, start_url, allowed_domain)
-                )
-                for link in product_links:
-                    second_links, link_text = await self._scrape_website(link, session)
-                    level_1_label = self._extract_node_label(link, 1)
-                    
-                    graph.add_node(level_1_label, text=link_text)
-                    graph.add_edge(root_label, level_1_label)
-
-                    # Process second layer
-                    second_layer_links = self._filter_product_links(
-                        self._filter_links(second_links, link, allowed_domain)
-                    )
-                    current_app.logger.debug(f"Found {len(second_layer_links)} second-layer links")
-
-                    for second_link in second_layer_links:
-                        _, second_text = await self._scrape_website(second_link, session)
-                        level_2_label = self._extract_node_label(second_link, 2)
-                        
-                        graph.add_node(level_2_label, text=second_text)
-                        graph.add_edge(level_1_label, level_2_label)
-
-        except Exception as e:
-            current_app.logger.error(
-                f"\n🔥 Critical Graph Build Error\n"
-                f"URL: {start_url}\n"
-                f"Error: {str(e)}\n"
-                f"{'-'*40}"
-            )
-            raise
-
-        return graph
-    def generate_visualization(self, graph: nx.DiGraph) -> str:
-            try:
-                net = Network(height="800px", width="100%", directed=True,  font_color="#333333")       
-                net.set_options("""
-         var options = {
-          "nodes": {
-            "shape": "dot",
-            "size": 20,
-            "font": {
-              "size": 14,
-              "face": "arial",
-              "strokeWidth": 2
-            },
-            "borderWidth": 2,
-            "shadow": {
-              "enabled": true,
-              "color": "rgba(0,0,0,0.5)",
-              "size": 10
-            }
-          },
-          "edges": {
-            "smooth": {
-              "type": "continuous",
-              "roundness": 0.4
-            },
-            "color": {
-              "inherit": "both"
-            },
-            "arrows": {
-              "to": {
-                "enabled": true,
-                "scaleFactor": 0.8
-              }
-            },
-            "width": 1.5,
-            "hoverWidth": 2
-          },
-          "physics": {
-            "barnesHut": {
-              "gravitationalConstant": -3000,
-              "centralGravity": 0.3,
-              "springLength": 200,
-              "springConstant": 0.04,
-              "damping": 0.09,
-              "avoidOverlap": 1
-            },
-            "minVelocity": 0.75,
-            "solver": "barnesHut",
-            "stabilization": {
-              "enabled": true,
-              "iterations": 1000,
-              "updateInterval": 100
-            }
-          },
-          "interaction": {
-            "hover": true,
-            "tooltipDelay": 200,
-            "keyboard": {
-              "enabled": true,
-              "speed": {
-                "x": 10,
-                "y": 10,
-                "zoom": 0.02
-              }
-            }
-          }
-        }
-        """)
-                node_data = list(graph.nodes(data=True))
-                current_app.logger.info("asdasd@@@@", node_data)
-                texts = [data.get("text", "") for _, data in node_data]
-                summaries = self._generate_ordered_summaries(node_data)
-
-        # Add nodes with their corresponding summaries
-                for idx, (node_label, data) in enumerate(node_data):
-                    summary = summaries[idx]
-                    wrapped_text = "\n".join(textwrap.wrap(summary, width=40))
-                    
-                    net.add_node(
-                        node_label,
-                        label=node_label,
-                        title=wrapped_text,
-                        color=self._node_color(node_label),
-                        
-                    )
-                    current_app.logger.debug(f"Added node: {node_label}")
-
-            
-                for edge in graph.edges():
-                    net.add_edge(edge[0], edge[1])
-                temp_file_path = "temp_graph_visualization.html"
-                net.write_html(temp_file_path)
-                with open(temp_file_path, "r", encoding="utf-8") as file:
-                    html_content = file.read()
-
-                return html_content
-
-            except Exception as e:
-                current_app.logger.error(f"Visualization failed: {str(e)}")
-                raise
-    def _generate_ordered_summaries(self, node_data: List[Tuple[str, dict]]) -> List[str]:
-        node_texts = [data.get("text", "") for _, data in node_data]
-        # Create a mapping of futures to their original indices
-        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-            future_to_index = {
-                executor.submit(self._generate_summary_wrapper(text)): idx
-                for idx, text in enumerate(node_texts)
-            }
-            
-            # Initialize list with correct size
-            summaries = [None] * len(node_texts)
-            
-            # Process completed futures
-            for future in concurrent.futures.as_completed(future_to_index):
-                idx = future_to_index[future]
-                try:
-                    summaries[idx] = future.result()
-                except Exception as e:
-                    current_app.logger.error(f"Summary failed for node {idx}: {str(e)}")
-                    summaries[idx] = "Summary unavailable"
-                    
-        return summaries           
-    # @retry(stop=stop_after_attempt(2),
-    #        wait=wait_exponential(multiplier=1, min=1, max=10),
-    #        retry=retry_if_exception(lambda e: 'rate_limit' in str(e)))
-    # @sleep_and_retry
-    # @limits(calls=60, period=60)
-    def _invoke_together_api(self, prompt):
-        return self.llm.model.invoke(prompt).content.strip()
-
-    def _generate_summary(self, text: str) -> str:
-        """Generate summary with proper error handling and logging"""
-        current_app.logger.info('Generating summary for text')
+        self.text_units = self._extract_entities(self.text_units)
         
-        if not text.strip():
-            current_app.logger.info('Empty text received')
-            return "No content available"
+        G = self._build_semantic_graph(self.text_units)
         
-        try:
-            prompt = f"""
-            Summarize this text in exactly one line, making it clear and concise:
-            {text}
-            Summary:
-            """
-            
-            response = self.llm.model.invoke(prompt).content.strip()
-            current_app.logger.info(f'Generated summary: {response}')
-            return response
-            
-        except Exception as e:
-            current_app.logger.error(f"Summary generation failed: {str(e)}")
-            return "Summary unavailable"
-
-    def create_vector_store(self, graph: nx.DiGraph):
-        """Create FAISS index from graph data"""
-        try:
-            docs = [
-                Document(page_content=data["text"])
-                for _, data in graph.nodes(data=True)
-                if data.get("text")
-            ]
-            self.vectorstore = FAISS.from_documents(docs, self.embedding_model)
-            self.vectorstore.save_local("faiss_index")
-            current_app.logger.info(f"Created vector store with {len(docs)} documents")
-        except Exception as e:
-            current_app.logger.error(f"Vector store creation failed: {str(e)}")
-            raise
-    def load_vector_store(self):
-        """Load the FAISS vector store from disk."""
-        try:
-            self.vectorstore = FAISS.load_local("faiss_index", self.embedding_model, allow_dangerous_deserialization=True)
-            current_app.logger.info("Vector store loaded successfully.")
-        except Exception as e:
-            current_app.logger.error(f"Failed to load vector store: {str(e)}")
-            raise
+        self.communities = self._perform_leiden_clustering(G)
    
-    def query_graph(self, query: str, k: int = 5) -> str:
-        try:
-            
-            if not self.vectorstore:
-                raise ValueError("Vector store not initialized - call create_vector_store first")
+        self.community_summaries = self._generate_community_summaries()
 
-            # Step 1: Retrieve relevant context from FAISS
-            retrieved_texts = self._graph_rag_retrieval(query, k=k)
-            
-            # Step 2: Format prompt using your existing template
-            prompt = self._format_prompt(query, retrieved_texts)
-            
-            # Step 3: Generate response using your LLMModel
-            response = self._generate_llm_response(prompt,retrieved_texts)
-            
-            return response
+        self.index = self._build_faiss_index()
+  
+        return self._visualize_graph_static(G)
 
-        except Exception as e:
-            self.app.logger.error(f"Query failed: {str(e)}")
-            raise
-
-    def _graph_rag_retrieval(self, query: str, k: int = 5) -> List[str]:
-        """Retrieve top k relevant documents from FAISS index"""
-        results = self.vectorstore.similarity_search(query, k=k)
-        return [doc.page_content for doc in results]
-
-    def _format_prompt(self, query: str, retrieved_texts: List[str], max_context: int = 3) -> str:
-        """Format prompt using your existing template"""
-        if not retrieved_texts:
-            retrieved_texts = ["No relevant context found."]
-
-        context_text = "\n".join(retrieved_texts[:max_context])
-
-        return f"""You are an AI assistant answering questions **strictly** based on the given context.
-        Provide a **short, precise answer** with no extra details. Use bullet points or direct sentences only when necessary.
-        Keep your response under 3-4 sentences. Do not give your own response and no hallucinations please.
-
-    Context:
-    {context_text}
-
-    User Query: {query}
-
-    Response (Answer only based on the above context in 3-4 sentences):
-    """
-
-    def _generate_llm_response(self, prompt: str, retrieved_text:str) -> str:
-        """Generate response using your LLMModel"""
-        try:
-            # Use your existing LLM integration
-            response = self.llm.model.invoke(prompt).content.strip()
-            return response
+    def query_graph(self, query: str):
+        """Complete query processing pipeline"""
         
-        except Exception as e:
-            self.app.logger.error(f"LLM response failed: {str(e)}")
-            return "Response unavailable"
+        query_embedding = self.st_model.encode([query])
+        distances, indices = self.index.search(query_embedding, 3)
+        self.last_retrieved = [self.text_units[i] for i in indices[0]]
+        retrieved_units = [self.text_units[i] for i in indices[0] if i <len(self.text_units)]
+        comm_ids = [self.communities.get(unit["unit_id"], -1) for unit in retrieved_units]
+        top_comm = max(set(comm_ids), key=comm_ids.count)
+        comm_summary = self.community_summaries.get(top_comm, "")   
+        product_links=[unit.get("url","No Link Available") for unit in retrieved_units]
+        retrieved_texts = "\n---\n".join([unit["text"] for unit in retrieved_units])
+        prompt = self._format_prompt(query, product_links, retrieved_texts)
+        
+        response = self.llm.model.invoke(prompt,max_tokens=1024).content.strip()
+        return response
 
     # Helper methods
-    def _extract_node_label(self, url: str, level: int) -> str:
-        parsed = urlparse(url)
-        if level == 0:
-            return parsed.netloc
-        path_parts = parsed.path.strip('/').split('/')
-        return path_parts[level-1] if len(path_parts) >= level else url
+    def _create_text_units(self, visited):
+        text_units = []
+        for url, text in visited.items():
+            segments = [seg.strip() for seg in text.split("\n\n") if len(seg.strip()) > 20]
+            for i, seg in enumerate(segments):
+                text_units.append({
+                    "url": url,
+                    "unit_id": f"{url}__{i}",
+                    "text": seg
+                })
+        return text_units
 
-    def _filter_product_links(self, links: List[str]) -> List[str]:
-        return [link for link in links
-                if any(kw in urlparse(link).path.lower() for kw in ["product", "products"])]
+    def _extract_entities(self, text_units):
+        for unit in text_units:
+            doc = self.nlp(unit["text"])
+            unit["entities"] = list(set(ent.text for ent in doc.ents))
+        return text_units
 
-    def _filter_links(self, links: List[str], base_url: str, allowed_domain: str) -> List[str]:
-        return [link for link in links if allowed_domain in urlparse(link).netloc]
+    def _build_semantic_graph(self, text_units):
+        G = nx.Graph()
+        entity_map = {}
+        
+        for unit in text_units:
+            G.add_node(unit["unit_id"], **unit)
+            for entity in unit["entities"]:
+                entity_map.setdefault(entity, []).append(unit["unit_id"])
+        
+        for units in entity_map.values():
+            for i in range(len(units)):
+                for j in range(i+1, len(units)):
+                    G.add_edge(units[i], units[j])
+        return G
 
-    def _node_color(self, label: str) -> str:
-        return f"#{hash(label) % 0xFFFFFF:06x}"
+    def _perform_leiden_clustering(self, G):
+        ig_nodes = list(G.nodes())
+        node_to_index = {n: i for i, n in enumerate(ig_nodes)}
+        edges = [(node_to_index[u], node_to_index[v]) for u, v in G.edges()]
+        
+        ig_graph = ig.Graph()
+        ig_graph.add_vertices(len(ig_nodes))
+        ig_graph.add_edges(edges)
+        partition = leidenalg.find_partition(ig_graph, leidenalg.RBConfigurationVertexPartition)
+        logger.info(f"Partitions:  {partition}")
+        return {node: partition.membership[i] for i, node in enumerate(ig_nodes)}
+
+    def _generate_community_summaries(self):
+        comm_groups = {}
+        for unit in self.text_units:
+            comm = self.communities.get(unit["unit_id"], -1)
+            comm_groups.setdefault(comm, []).append(unit["unit_id"])
+        
+        summaries = {}
+        for comm, unit_ids in comm_groups.items():
+            combined = " ".join(u["text"] for u in self.text_units if u["unit_id"] in unit_ids)
+            summaries[comm] = combined[:500] + "..." if len(combined) > 500 else combined
+        return summaries
+
+    def _build_faiss_index(self):
+        embeddings = self.st_model.encode([u["text"] for u in self.text_units])
+        index = faiss.IndexFlatL2(embeddings.shape[1])
+        index.add(np.array(embeddings).astype("float32"))
+        return index
+    # Community Summary: {comm_summary}
+    def _format_prompt(self, query, product_links, retrieved_texts):
+        max_input_length = 6000  # Setting a limit so inputs + response stay below 8193
+        trimmed_texts = retrieved_texts[:max_input_length]
+        
+        prompt = (
+            f"Context:\n{trimmed_texts}\n\n"
+        f"Available Product Links:\n" + "\n".join(product_links) + "\n\n"
+        f"Question: {query}\n\n"
+        "Provide only one of these responses:\n"
+        "- If product information is available Respond in this form...."
+        "Response: '[clear  and relaveant answer to query]'\n"
+        "Source_Link: [Relevant product link]"  
+        "If there is NO Response:"
+        "Response: 'There is NO relevant Response'\n"
+        "Source_Link: 'There is NO relevant Response'"
+        "- If no relevant information is found: 'I don't have enough information."
+        f"Answer the question using ONLY the provided Context above.\n"
+        "If relevant product information is available, provide a clear and meaningful response.\n"
+        "Include ONLY ONE product link if available.\n"
+        "If no relevant information is found, return exactly: 'I don't have enough information.'\n"
+        "DO NOT repeat the answer or the link. DO NOT add extra text, notes, or disclaimers.\n\n"
+
+
+    )
+        return prompt        
+
+
+    def _visualize_graph_static(self, G, output_file="graph_static.html"):
+        """Generate interactive graph visualization with custom JS"""
+        # Create network
+        num_nodes = len(G.nodes)
+        if num_nodes <= 50:
+            spring_length = 200
+            gravity = -1500
+        elif num_nodes <= 150:
+            spring_length = 400
+            gravity = -2500
+        else:
+            spring_length = 700
+            gravity = -3500
+        
+        pos = nx.spring_layout(G, k=0.8, seed=42)
+        net = Network(
+            height="800px", 
+            width="100%", 
+            bgcolor="#ffffff", 
+            font_color="black",
+            notebook=False, 
+            directed=True
+        )
+        
+        net.set_options(f"""
+    {{
+        "physics": {{
+            "enabled": false,
+            "forceAtlas2Based": {{
+                "gravitationalConstant": {gravity},
+                "centralGravity": 0.005,
+                "springLength": {spring_length},
+                "springConstant": 0.02,
+                "damping": 0.4,
+                "avoidOverlap": 1.0
+            }},
+            "solver": "forceAtlas2Based"
+        }},
+        "interaction": {{
+            "hover": true
+        }},
+        "layout": {{
+            "hierarchical": {{
+                "enabled": false,
+                "direction": "UD",
+                "sortMethod": "hubsize"
+            }}
+        }}
+    }}
+    """)
+
+        # Add nodes with custom styling
+        for node, data in G.nodes(data=True):
+            x = pos[node][0] * 1000
+            y = pos[node][1] * 1000
+            url = data.get("url", "#")
+            full_text = data.get("text", "")
+            parsed_url = urlparse(url)
+            last_part = parsed_url.path.rstrip('/').split('/')[-1] if parsed_url.path else "unknown"
+            label_text = full_text[:50] + "..." if len(full_text) > 50 else full_text
+            tooltip = f"URL: {url}\nLabel: {label_text}"
+            random_color = "#%06x" % random.randint(0, 0xFFFFFF)
+            
+            net.add_node(
+                node, 
+                label=last_part, 
+                title=tooltip, 
+                color=random_color, 
+                shape="dot",
+                size=20, 
+                x=x, 
+                y=y, 
+                fixed=True,
+                borderWidth=3,
+                shadow=True, 
+                href=url
+            )
+
+        # Add edges
+        # for source, target in G.edges():
+        #     net.add_edge(source, target)
+        for edge in G.edges(data=True):
+            source, target, edge_data = edge
+            weight = edge_data.get("weight", 1)
+            edge_color = "#%06x" % random.randint(0, 0xFFFFFF)
+            net.add_edge(source, target, color=edge_color, width=weight * 0.5, 
+                        arrowsize=0.3, smooth=True, dashes=random.choice([True, False]))
+        # Generate HTML
+        output_path = os.path.join(self.builder.data_dir, output_file)
+        net.save_graph(output_path)
+
+        # Add custom JavaScript
+        self._add_custom_js(output_path)
+        
+        return self._read_html(output_path)
+    def get_last_retrieved_sources(self):
+        """Get sources from last query"""
+        return [{
+            "url": u["url"],
+            "text": u["text"][:200] + "..." if len(u["text"]) > 200 else u["text"]
+        } for u in self.last_retrieved]
+    def _add_custom_js(self, file_path: str):
+        """Inject custom JavaScript for node click handling"""
+        custom_js = """
+        <script type="text/javascript">
+        setTimeout(function(){
+            network.on("click", function(params) {
+            if (params.nodes.length > 0) {
+                var nodeId = params.nodes[0];
+                var nodeData = network.body.data.nodes.get(nodeId);
+                if (nodeData.href && nodeData.href !== "#") {
+                window.open(nodeData.href, "_blank");
+                }
+            }
+            });
+        }, 1000);
+        </script>
+"""
+        with open(file_path, "r+", encoding="utf-8") as f:
+            html = f.read()
+            html = html.replace("</body>", custom_js + "\n</body>")
+            f.seek(0)
+            f.write(html)
+            f.truncate()
+
+    def _read_html(self, file_path: str) -> str:
+        """Read generated HTML content"""
+        with open(file_path, "r", encoding="utf-8") as f:
+            return f.read()

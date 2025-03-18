@@ -37,3 +37,7 @@ asyncio
 networkx>=3.2.1
 pyvis>=0.3.0
 faiss-cpu>=1.7.4
+playwright
+spacy==3.7.4
+igraph
+leidenalg
