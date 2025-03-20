@@ -16,6 +16,7 @@ from flask import request, jsonify, send_from_directory
 from langchain.vectorstores import FAISS
 from typing import Dict
 import asyncio
+import re
 import nest_asyncio
 
 doc_updates = 0
@@ -329,7 +330,7 @@ def process_graph():
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         visited, _ = loop.run_until_complete(
-            builder.crawl_website(data["url"], data.get("depth",1)))
+            builder.crawl_website(data["url"], int(data.get("depth",1))))
         html_content = processor.process_scraped_data(visited)
         print("🛠 DEBUG: HTML Content:", html_content[:500])
         return Response(html_content, mimetype="text/html")
@@ -346,18 +347,20 @@ def graph_query():
             return jsonify({"error": "Query parameter required"}), 400
         if not builder.load_scraped_data():
             return jsonify({"error": "No processed data available - run /graph/process first"}), 400
-        # Get LLM response
-        response = processor.query_graph(data["query"])
-        response_text = ""
-        link_text = ""
-        for line in response.splitlines():
-            if line.startswith("Response:"):
-                response_text = line[len("Response:"):].strip()
-            elif line.startswith("Source_Link:"):
-                link_text = line[len("Source_Link:"):].strip()
+        # Get LLM 
         
+        response = processor.query_graph(data["query"])
+        current_app.logger.info(f"Graph query response: {response}",exc_info=True)
+        url_pattern = r"(https?://\S+)"
+        matches = re.findall(url_pattern, response)
+        link_text = matches[0] if matches else "No Link found :("
+        lines = response.splitlines()
+        filtered_lines = [line for line in lines if not re.search(url_pattern, line)]
+        clean_response = "\n".join(filtered_lines)
+        # current_app.logger.info(f"Graph query response: {response_text}",exc_info=True)
+        # current_app.logger.error(f"Graph query error: ",exc_info=True)
         return jsonify({
-            "response": response_text,
+            "response": clean_response,
             "link": link_text
         })
     except Exception as e:
