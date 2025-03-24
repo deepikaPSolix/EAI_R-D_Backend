@@ -13,6 +13,7 @@ from app.llm_model import LLMModel
 from sentence_transformers import SentenceTransformer
 from pyvis.network import Network
 from typing import Dict, List
+from flask import current_app
 import logging
 logger = logging.getLogger(__name__)
 class GraphProcessor:
@@ -26,7 +27,6 @@ class GraphProcessor:
         self.index = None
         self.builder=builder
         self.text_units = []
-        self.last_retrieved = []
         self.communities = {}
         self.community_summaries = {}
 
@@ -53,8 +53,7 @@ class GraphProcessor:
         """Complete query processing pipeline"""
         
         query_embedding = self.st_model.encode([query])
-        distances, indices = self.index.search(query_embedding, 3)
-        self.last_retrieved = [self.text_units[i] for i in indices[0]]
+        distances, indices = self.index.search(query_embedding, 5)
         retrieved_units = [self.text_units[i] for i in indices[0] if i <len(self.text_units)]
         comm_ids = [self.communities.get(unit["unit_id"], -1) for unit in retrieved_units]
         top_comm = max(set(comm_ids), key=comm_ids.count)
@@ -63,7 +62,8 @@ class GraphProcessor:
         retrieved_texts = "\n---\n".join([unit["text"] for unit in retrieved_units])
         prompt = self._format_prompt(query, product_links, retrieved_texts)
         
-        response = self.llm.model.invoke(prompt,max_tokens=1024).content.strip()
+        response = self.llm.model.invoke(prompt,max_tokens=2000).content.strip()
+        print("RESPNSE: ", response)
         return response
 
     def _create_text_units(self, visited):
@@ -131,21 +131,16 @@ class GraphProcessor:
     def _format_prompt(self, query, product_links, retrieved_texts):
         max_input_length = 6000
         trimmed_texts = retrieved_texts[:max_input_length]
-        
+        # current_app.logger.info(f"**************************** query response: {trimmed_texts}",exc_info=True)
         prompt = (
             f"Context:\n{trimmed_texts}\n\n"
         f"Available Product Links:\n" + "\n".join(product_links) + "\n\n"
         f"Question: {query}\n\n"
         "Provide only one of these responses:\n"
-        "- If product information is available Respond in this form...."
-        "Response: '[clear  and relaveant answer to query]'\n"
-        "Source_Link: [Relevant product link]"  
-        "If there is NO Response:"
-        "Response: 'There is NO relevant Response'\n"
-        "Source_Link: 'There is NO relevant Response'"
+       "- If product information is available: '[clear  and relaveant answer to query]\n[Relevant product link]'\n"
         "- If no relevant information is found: 'I don't have enough information."
         f"Answer the question using ONLY the provided Context above.\n"
-        "If relevant product information is available, provide a clear and meaningful response.\n"
+        "If relevant product information is available, provide a clear and meaningful answer.\n"
         "Include ONLY ONE product link if available.\n"
         "If no relevant information is found, return exactly: 'I don't have enough information.'\n"
         "DO NOT repeat the answer or the link. DO NOT add extra text, notes, or disclaimers.\n\n"
@@ -240,12 +235,7 @@ class GraphProcessor:
         net.save_graph(output_path)
         self._add_custom_js(output_path)
         return self._read_html(output_path)
-    def get_last_retrieved_sources(self):
-        """Get sources from last query"""
-        return [{
-            "url": u["url"],
-            "text": u["text"][:200] + "..." if len(u["text"]) > 200 else u["text"]
-        } for u in self.last_retrieved]
+
     def _add_custom_js(self, file_path: str):
         """Inject custom JavaScript for node click handling"""
         custom_js = """

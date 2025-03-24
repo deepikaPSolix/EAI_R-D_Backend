@@ -74,7 +74,7 @@ class GraphBuilder:
         to_crawl = [(start_url, 0)]
         while to_crawl:
             current_url, depth = to_crawl.pop(0)
-            if depth > max_depth:
+            if int(depth) > max_depth:
                 continue
                 
             links = await self._scrape_website(current_url, start_url)
