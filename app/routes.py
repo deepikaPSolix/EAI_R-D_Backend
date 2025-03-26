@@ -349,7 +349,7 @@ def graph_query():
             return jsonify({"error": "No processed data available - run /graph/process first"}), 400
         # Get LLM 
         
-        response = processor.query_graph(data["query"])
+        response = processor.query_graph(data["query"],data["model_name"])
         current_app.logger.info(f"Graph query response: {response}",exc_info=True)
         url_pattern = r"(https?://\S+)"
         matches = re.findall(url_pattern, response)

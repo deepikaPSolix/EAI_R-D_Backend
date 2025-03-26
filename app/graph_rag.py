@@ -49,7 +49,7 @@ class GraphProcessor:
   
         return self._visualize_graph_static(G)
 
-    def query_graph(self, query: str):
+    def query_graph(self, query: str,model_name:str):
         """Complete query processing pipeline"""
         
         query_embedding = self.st_model.encode([query])
@@ -61,8 +61,9 @@ class GraphProcessor:
         product_links=[unit.get("url","No Link Available") for unit in retrieved_units]
         retrieved_texts = "\n---\n".join([unit["text"] for unit in retrieved_units])
         prompt = self._format_prompt(query, product_links, retrieved_texts)
-        
-        response = self.llm.model.invoke(prompt,max_tokens=2000).content.strip()
+        current_app.logger.info(f"Model selected for graph query is : {model_name}")
+        llmRes=LLMModel(model_name)
+        response = llmRes.model.invoke(prompt,max_tokens=2000).content.strip()
         print("RESPNSE: ", response)
         return response
 
