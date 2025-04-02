@@ -1,5 +1,5 @@
 # Use an official Python runtime as a parent image
-FROM python:3.12-slim AS builder
+FROM python:3.11-slim AS builder
 
 # Set the working directory in the container
 WORKDIR /myapp
@@ -11,7 +11,7 @@ COPY ./app /myapp/app
 # Obfuscate the application source files
 RUN pyarmor gen -O dist app
 
-FROM python:3.12-slim AS runtime
+FROM python:3.11-slim AS runtime
 
 WORKDIR /myapp
 
