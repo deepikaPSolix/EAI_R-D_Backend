@@ -11,6 +11,13 @@ from unstructured.partition.text import partition_text
 from unstructured.partition.auto import partition
 from unstructured.chunking.basic import chunk_elements
 from unstructured.documents.elements import Element
+from pptx import Presentation
+import io
+from docx import Document
+from lxml import etree
+import openpyxl
+from flask import current_app
+import pandas as pd
 
 class FileProcessor(ABC):
     @abstractmethod
@@ -45,11 +52,172 @@ class FileProcessor(ABC):
 
         elements = partition(filename=file_path)
         return chunk_elements(elements, overlap=50, max_characters=2000)
+
+class ExcelFileProcessor(FileProcessor):
+    def process_file(self, file_path) -> list[Element]:
+        # Get clean text from Excel and chunk it
+        excel_text = self.__extract_text_from_excel(file_path)
+        return super().chunks_from_text(excel_text)
+
+    def __extract_text_from_excel(self, file_path: str) -> str:
+        df_sheets = pd.read_excel(file_path, sheet_name=None)
+        text_data = []
+
+        for sheet_name, df in df_sheets.items():
+            df = df.dropna(how='all')           # Drop fully empty rows
+            df = df.dropna(axis=1, how='all')   # Drop fully empty columns
+            df = df.fillna("")                  # Replace remaining NaNs with empty strings
+
+            if not df.empty:
+                text = df.to_string(index=False)
+                text_data.append(f"[Sheet: {sheet_name}]\n{text}\n")
+
+        return "\n".join(text_data)
     
 
 class GenericFileProcessor(FileProcessor):
     def process_file(self, file_path) -> list[Element]:
         return super().chunks_from_file(file_path)
+    
+    def docx_ocr_replace(self, input_path, output_path):
+        """Replace images in DOCX with OCR text while preserving layout"""
+
+        # Load the document
+        doc = Document(input_path)
+
+        # XML namespaces
+        namespaces = {
+            'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main',
+            'a': 'http://schemas.openxmlformats.org/drawingml/2006/main',
+            'pic': 'http://schemas.openxmlformats.org/drawingml/2006/picture',
+            'r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+        }
+
+        # Process each paragraph
+        for paragraph in doc.paragraphs:
+            # Convert paragraph XML to lxml element for proper namespace handling
+            p_xml = paragraph._p.xml
+            p_tree = etree.fromstring(p_xml)
+            paragraph.text = ''  # Clear the paragraph text
+
+            # Find all images in this paragraph
+            for pic in p_tree.xpath('.//pic:pic', namespaces=namespaces):
+                # Get the image relationship ID
+                blip = pic.xpath('.//a:blip', namespaces=namespaces)[0]
+                rId = blip.attrib.get(f'{{{namespaces["r"]}}}embed')
+
+                if rId and rId in doc.part.related_parts:
+                    image_part = doc.part.related_parts[rId]
+                    image_data = image_part.blob
+
+                    # Run OCR
+                    try:
+                        # pyteseract
+                        # img = Image.open(io.BytesIO(image_data))
+                        # text = pytesseract.image_to_string(img)
+
+                        # unstructured
+                        elements = partition(file=io.BytesIO(image_data))
+                        text = ''
+                        for element in elements:
+                            try:
+                                text += str(element.text) + '\n'
+                            except Exception as e:
+                                current_app.logger.error(str(e))
+
+                        # Replace the image with text (simple version - replaces entire paragraph)
+                        paragraph.text += text.strip() + '\n'
+
+                        # Alternative: Add text after the image (preserves other content)
+                        # paragraph.add_run("\nOCR Result: " + text.strip())
+
+                    except Exception as e:
+                        print(f"OCR failed: {str(e)}")
+                        
+        # Save the modified document
+        doc.save(output_path)
+    
+    def xlsx_ocr_replace(self, input_path, output_path):
+        """Replace images in XLSX with OCR text"""
+        
+        # Load the workbook
+        wb = openpyxl.load_workbook(input_path)
+        
+        for sheet in wb.worksheets:
+            to_remove = []
+            for image in sheet._images:
+                # Extract image data
+                img_data = image._data()
+
+                # pytesseract
+                # img = Image.open(io.BytesIO(img_data))
+                # # Perform OCR
+                # text = pytesseract.image_to_string(img)
+                
+                # unstructured
+                elements = partition(file=io.BytesIO(img_data))
+                text = ''
+                for element in elements:
+                    try:
+                        text += str(element.text) + '\n'
+                    except Exception as e:
+                        current_app.logger.error(str(e))
+                
+                # Remove the image
+                to_remove.append(image)
+                # Add text to the nearest cell
+                cell = sheet.cell(row=image.anchor._from.row+1, 
+                                column=image.anchor._from.col+1)
+                cell.value = text.strip()
+                
+            for image_to_remove in to_remove:
+                try:
+                    sheet._images.remove(image_to_remove)
+                except Exception as e:
+                    current_app.logger.error(str(e))
+        
+        wb.save(output_path)
+    
+    def pptx_ocr_replace(self, input_path, output_path):
+        """Replace images in PPTX with OCR text"""
+        
+        prs = Presentation(input_path)
+        # pytesseract.pytesseract.tesseract_cmd = r'/usr/bin/tesseract'  # Linux path
+        
+        for slide in prs.slides:
+            for shape in list(slide.shapes):  # Create a copy for iteration
+                if shape.shape_type == 13:  # Picture type
+                    # Extract image
+                    img_bytes = shape.image.blob
+
+                    # pytesseract
+                    # img = Image.open(io.BytesIO(img_bytes))
+                    # # Perform OCR
+                    # text = pytesseract.image_to_string(img)
+
+                    # unstructured
+                    elements = partition(file=io.BytesIO(img_bytes))
+                    text = ''
+                    for element in elements:
+                        try:
+                            text += str(element.text) + '\n'
+                        except Exception as e:
+                            current_app.logger.error(str(e))
+                    
+                    # Replace with text box
+                    left = shape.left
+                    top = shape.top
+                    width = shape.width
+                    height = shape.height
+                    
+                    textbox = slide.shapes.add_textbox(left, top, width, height)
+                    text_frame = textbox.text_frame
+                    text_frame.text = text.strip()
+                    
+                    # Remove original image
+                    slide.shapes._spTree.remove(shape._element)
+        
+        prs.save(output_path)
 
 
 class AudioFileProcessor(FileProcessor):

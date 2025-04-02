@@ -10,7 +10,7 @@ import pandas as pd
 from app.chroma_db import ChromaDB
 from app.cluster_classify import Classification, Clustering, LabelGenerator
 from app.dynamic_extractor import DynamicExtractor
-from app.file_processor import AudioFileProcessor, GenericFileProcessor, VideoFileProcessor
+from app.file_processor import AudioFileProcessor, GenericFileProcessor, VideoFileProcessor,ExcelFileProcessor
 from app.ragEvaluation import ragEval
 from app.ragEvaluationScreenTwo import TextAnalysis
 import app.utils as utils
@@ -128,9 +128,25 @@ def parse_file(self, file_path: str):
         elif file_type == "mp4":
             video_processor = VideoFileProcessor()
             chunks = video_processor.process_file(file_path)
+        elif file_type in ["xlsx", "xls"]:
+            processor = ExcelFileProcessor()
+            if file_type == "xlsx":
+                generic_processor_xl = GenericFileProcessor()
+                generic_processor_xl.xlsx_ocr_replace(input_path=file_path, output_path=file_path)
+            chunks = processor.process_file(file_path)
         else:
             generic_processor = GenericFileProcessor()
+            try:
+                if file_type == 'docx':
+                    generic_processor.docx_ocr_replace(input_path=file_path, output_path=file_path)
+                elif file_type == 'pptx':
+                    generic_processor.pptx_ocr_replace(input_path=file_path, output_path=file_path)
+            except Exception as e:
+                current_app.logger.error(str(e))
             chunks = generic_processor.process_file(file_path)
+
+        
+
         attr_ext = DynamicExtractor()
         attr_res = attr_ext.extract_from_file(chunks)
         current_app.logger.info(f"Extracted attributes from file. {attr_res.model_dump()}")
@@ -474,4 +490,3 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
     except Exception as e:
         print(f"Error in Screen 2 Evaluation Function: {e}")
         return f"Error in Screen 2 Evaluation Function: {str(e)}"
-
