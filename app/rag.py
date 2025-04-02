@@ -133,9 +133,10 @@ class RAG:
 
         # Invoke the language model with the constructed prompt
         response = self.model.invoke(context)
-        print(type(top_reranked_docs))
+        #print(type(top_reranked_docs))
         #data=pd.DataFrame({"input":curated_query,"output":response.content,"files":[top_reranked_docs]})
         #data.to_csv("halln.csv")
+        current_app.logger.info(type(response.content))
         
         return (response.content,curated_query,top_reranked_docs)
 

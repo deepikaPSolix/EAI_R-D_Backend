@@ -17,6 +17,7 @@ from langchain.vectorstores import FAISS
 from typing import Dict
 import asyncio
 import re
+from app.dashboard import Dashboard
 import nest_asyncio
 
 doc_updates = 0
@@ -136,10 +137,40 @@ def query_rag2():
             data["query"]    
         ]
         screen2EvaluationFunction.delay(combinedList)
-        return jsonify({"response": res})
+
+        response_json = {"response": res}
+
+        if(data["lida"] == True):
+            dash = Dashboard()
+            path=dash.generate_csv_from_response(response=res, model_source="together")
+            openai_api_key = os.getenv("OPENAI_API_KEY")
+            chart_link=dash.run_lida_on_csv(path, user_query=data["query"]+", represent in "+data["graph_type"] + "chart ", api_key=openai_api_key)
+
+            current_app.logger.info(" Lida : image generated")
+            response_json["chart"] = "/"+chart_link
+        
+        
+        return jsonify(response_json)
+        
+    
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+
+@main.route('/cache/images/<filename>')
+def serve_image(filename):
+    images_dir = os.path.join('/myapp', 'cache', 'images')  # Absolute path in container
+
+    full_path = os.path.join(images_dir, filename)
+    current_app.logger.info(f"Looking for image at: {full_path}")
+
+    if not os.path.exists(full_path):
+        current_app.logger.error(f"Image not found: {full_path}")
+        return jsonify({"error": "Image not found"}), 404
+
+    return send_from_directory(images_dir, filename)
+
+
 
 @main.route('/status/<task_id>')
 def get_status(task_id):

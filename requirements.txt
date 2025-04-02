@@ -41,3 +41,6 @@ playwright
 spacy==3.7.4
 igraph
 leidenalg
+node2vec
+lida
+lida[infographics]
