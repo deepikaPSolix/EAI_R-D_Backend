@@ -383,8 +383,8 @@ def graph_query():
         response = processor.query_graph(data["query"],data["model_name"])
         current_app.logger.info(f"Graph query response: {response}",exc_info=True)
         url_pattern = r"https?://\S+"
-        links = re.findall(url_pattern, result)
-        text_without_links = re.sub(url_pattern, "", result)
+        links = re.findall(url_pattern, response)
+        text_without_links = re.sub(url_pattern, "", response)
         clean_response = re.sub(r"\n+", "\n", text_without_links).strip()
         link_text=links[0] if links else "No Link found :("
         # current_app.logger.info(f"Graph query response: {response_text}",exc_info=True)
