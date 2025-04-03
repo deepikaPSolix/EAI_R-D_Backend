@@ -382,12 +382,11 @@ def graph_query():
         
         response = processor.query_graph(data["query"],data["model_name"])
         current_app.logger.info(f"Graph query response: {response}",exc_info=True)
-        url_pattern = r"(https?://\S+)"
-        matches = re.findall(url_pattern, response)
-        link_text = matches[0] if matches else "No Link found :("
-        lines = response.splitlines()
-        filtered_lines = [line for line in lines if not re.search(url_pattern, line)]
-        clean_response = "\n".join(filtered_lines)
+        url_pattern = r"https?://\S+"
+        links = re.findall(url_pattern, result)
+        text_without_links = re.sub(url_pattern, "", result)
+        clean_response = re.sub(r"\n+", "\n", text_without_links).strip()
+        link_text=links[0] if links else "No Link found :("
         # current_app.logger.info(f"Graph query response: {response_text}",exc_info=True)
         # current_app.logger.error(f"Graph query error: ",exc_info=True)
         return jsonify({
