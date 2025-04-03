@@ -1,7 +1,10 @@
 services:
   flask-app:
-    image: idc-dev-image
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: dev-flask-app
+    # restart: always
     ports:
       - "5000:5000"
     env_file:
@@ -13,6 +16,16 @@ services:
     depends_on:
       - redis
     volumes:
+      # - dev_idc_data:/myapp/cache
+      # - dev_idc_data:/myapp/cache/output
+      # - dev_idc_data:/myapp/cache/ml-model
+      # - dev_idc_data:/myapp/cache/uploads
+      # - dev_idc_data:/myapp/cache/chromadb
+      # - dev_idc_data:/root/.cache/whisper
+      # - dev_idc_data:/root/.cache/chroma
+      # - dev_idc_data:/root/.paddleocr
+      # - dev_idc_data:/usr/share/nltk_data 
+      # - dev_idc_data:/myapp/cache/logs
       - ./cache:/myapp/cache
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
@@ -21,7 +34,7 @@ services:
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
-      - nltk_data:/usr/share/nltk_data
+      - nltk_data:/usr/share/nltk_data 
     deploy:
       resources:
         reservations:
@@ -31,7 +44,9 @@ services:
               capabilities: [gpu]
 
   celery-worker:
-    image: idc-dev-image
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: dev-celery-worker
     restart: always
     command: celery -A celery_worker.celery worker --autoscale=10,2 --loglevel=info -Q cpu_queue
@@ -44,6 +59,16 @@ services:
     depends_on:
       - redis
     volumes:
+      # - dev_idc_data:/myapp/cache
+      # - dev_idc_data:/myapp/cache/output
+      # - dev_idc_data:/myapp/cache/ml-model
+      # - dev_idc_data:/myapp/cache/uploads
+      # - dev_idc_data:/myapp/cache/chromadb
+      # - dev_idc_data:/root/.cache/whisper
+      # - dev_idc_data:/root/.cache/chroma
+      # - dev_idc_data:/root/.paddleocr
+      # - dev_idc_data:/usr/share/nltk_data 
+      # - dev_idc_data:/myapp/cache/logs
       - ./cache:/myapp/cache
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
@@ -52,7 +77,7 @@ services:
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
-      - nltk_data:/usr/share/nltk_data
+      - nltk_data:/usr/share/nltk_data 
     deploy:
       resources:
         reservations:
@@ -62,7 +87,9 @@ services:
               capabilities: [gpu]
 
   celery-worker-gpu:
-    image: idc-dev-image
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: dev-celery-worker-gpu
     restart: always
     command: celery -A celery_worker.celery worker --concurrency=1 --loglevel=info -Q gpu_queue
@@ -75,6 +102,16 @@ services:
     depends_on:
       - redis
     volumes:
+      # - dev_idc_data:/myapp/cache
+      # - dev_idc_data:/myapp/cache/output
+      # - dev_idc_data:/myapp/cache/ml-model
+      # - dev_idc_data:/myapp/cache/uploads
+      # - dev_idc_data:/myapp/cache/chromadb
+      # - dev_idc_data:/root/.cache/whisper
+      # - dev_idc_data:/root/.cache/chroma
+      # - dev_idc_data:/root/.paddleocr
+      # - dev_idc_data:/usr/share/nltk_data 
+      # - dev_idc_data:/myapp/cache/logs
       - ./cache:/myapp/cache
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
@@ -83,7 +120,7 @@ services:
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
-      - nltk_data:/usr/share/nltk_data
+      - nltk_data:/usr/share/nltk_data 
     deploy:
       resources:
         reservations:
@@ -99,6 +136,7 @@ services:
       - "6379:6379"
     restart: always
 
+
 volumes:
-  dev_idc_data:
+  dev_idc_data: 
   nltk_data:
