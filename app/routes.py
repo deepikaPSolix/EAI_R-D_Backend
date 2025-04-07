@@ -5,16 +5,15 @@ from openai import NotFoundError
 from celery.result import AsyncResult
 from app.chroma_db import ChromaDB
 from app.graph_builder import GraphBuilder
-from app.graph_rag import GraphProcessor
-# from app.graph_test import GraphRAGSystem
-from app.cluster_classify import ClusterAndClassify
 from app.models.doc_file import DocFile
+from app.cluster_classify import ClusterAndClassify
 from app.rag import RAG
-from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction
+from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction, parse_graph_file
 from app.utils import delete_files
 from flask import request, jsonify, send_from_directory
 from langchain.vectorstores import FAISS
 from typing import Dict
+from app.graphFiles import GraphFiles
 import asyncio
 import re
 from app.dashboard import Dashboard
@@ -41,7 +40,7 @@ def serve_file(filename):
     try:
         return send_from_directory(current_app.config['UPLOAD_DIR_PATH'], filename)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e)},exc_info=True), 500
 
 
 @main.route("/docs/uploadandtrain", methods=['POST'])
@@ -345,28 +344,68 @@ def rag2EvalResults():
     except Exception as e:
         print(f"Error fetching evaluation results: {e}")
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
-    
-nest_asyncio.apply()
 
-data_dir = os.path.join(os.path.dirname(__file__), "data")
-builder = GraphBuilder(data_dir=data_dir)  # Single instance for data consistency
-processor = GraphProcessor(builder)
+
+# data_dir = os.path.join(os.path.dirname(__file__), "data")
+# builder = GraphBuilder(data_dir=data_dir)  # Single instance for data consistency
+# processor = GraphProcessor(builder)
 @main.route("/graph/process", methods=["POST"])
 def process_graph():
+    nest_asyncio.apply()
     try:
         data = request.get_json()
         if not data or "url" not in data:
             return jsonify({"error": "URL required"}), 400
-
+        builder=GraphBuilder()
+        graph=GraphFiles()
+        graph.source_url = data["url"] 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        visited, _ = loop.run_until_complete(
+        visited= loop.run_until_complete(
             builder.crawl_website(data["url"], int(data.get("depth",1))))
-        html_content = processor.process_scraped_data(visited)
-        print("🛠 DEBUG: HTML Content:", html_content[:500])
+        chunks = builder.chunk_visited_pages(visited)
+        G_nx = graph.build_similarity_graph(chunks)
+        html_content = graph.render_graph_html(G_nx, min_cluster_size=7,MAX_LABEL_NODES=23)
+        current_app.graph_builder = graph
         return Response(html_content, mimetype="text/html")
     except Exception as e:
         current_app.logger.error(f"Processing error: {str(e)}",exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+@main.route("/graph/uploaddocs", methods=['POST'])
+def docupload():
+    try:
+        if 'files[]' not in request.files:
+            return jsonify({"error": "No files provided"}), 400
+        
+        files = request.files.getlist('files[]')
+        current_app.logger.info("FILES ARE BEING PROCESSED..... Hold UP!")
+        saved_files = []
+        filenames = []
+        # Save uploaded files
+        for file in files:
+            if file.filename == '':
+                return jsonify({"error": "Empty filename"}), 400
+            
+            file_path = os.path.join(current_app.config['GRAPH_DOC_UPLOAD'], file.filename)
+            file.save(file_path)
+            saved_files.append(file_path)
+            filenames.append(file.filename)
+
+        chunks = []
+        for file_path in saved_files:
+            chunk_list =[chunk.text for chunk in parse_graph_file(file_path)] # 👈 Return only chunks
+            chunks.extend(chunk_list)
+        current_app.logger.info("CHUNKS CREATED :)")
+        graph_builder = GraphFiles()
+        graph_builder.file_names = filenames
+        G_nx = graph_builder.build_similarity_graph(chunks)
+        html_path = graph_builder.render_graph_html(G_nx, min_cluster_size=3,MAX_LABEL_NODES=15)
+        current_app.graph_builder = graph_builder
+        return Response(html_path, mimetype="text/html")
+    except Exception as e:
+        current_app.logger.error(str(e), exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
@@ -376,23 +415,48 @@ def graph_query():
         data = request.get_json()
         if not data or "query" not in data:
             return jsonify({"error": "Query parameter required"}), 400
-        if not builder.load_scraped_data():
-            return jsonify({"error": "No processed data available - run /graph/process first"}), 400
-        # Get LLM 
-        
-        response = processor.query_graph(data["query"],data["model_name"])
-        current_app.logger.info(f"Graph query response: {response}",exc_info=True)
+
+        if not hasattr(current_app, "graph_builder"):
+            return jsonify({"error": "Graph not ready. Please upload documents or scrape website first."}), 400
+
+        builder = current_app.graph_builder
+
+        result = builder.query_graph_link_response(data["query"])
+
+        # Extract link and clean text from result
         url_pattern = r"https?://\S+"
-        links = re.findall(url_pattern, response)
-        text_without_links = re.sub(url_pattern, "", response)
+        links = re.findall(url_pattern, result)
+        text_without_links = re.sub(url_pattern, "", result)
         clean_response = re.sub(r"\n+", "\n", text_without_links).strip()
-        link_text=links[0] if links else "No Link found :("
-        # current_app.logger.info(f"Graph query response: {response_text}",exc_info=True)
-        # current_app.logger.error(f"Graph query error: ",exc_info=True)
-        return jsonify({
-            "response": clean_response,
-            "link": link_text
-        })
+
+        response_json = {
+            "response": clean_response
+        }
+
+        # Include the link if it's present
+        if links:
+            response_json["link"] = links[0]
+
+        return jsonify(response_json)
+
     except Exception as e:
-        current_app.logger.error(f"Graph query error: {str(e)}",exc_info=True)
+        current_app.logger.error(f"Graph query error: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+
+# @main.route("/graph/querydocs", methods=['POST'])
+# def query_documents():
+#     try:
+#         data = request.get_json()
+#         if not data or "query" not in data:
+#             return jsonify({"error": "Query parameter required"}), 400
+
+#         if not hasattr(current_app, "graph_builder"):
+#             return jsonify({"error": "Graph not initialized. Upload documents first."}), 400
+#         # graph_builder = GraphFiles()
+#         response = current_app.graph_builder.query_graph(data["query"])
+#         return jsonify(response)
+
+#     except Exception as e:
+#         current_app.logger.error(f"Document query error: "+ str(e), exc_info=True)
+#         return jsonify({"error": str(e)}), 500

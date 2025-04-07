@@ -218,7 +218,7 @@ class GenericFileProcessor(FileProcessor):
                     slide.shapes._spTree.remove(shape._element)
         
         prs.save(output_path)
-
+    
 
 class AudioFileProcessor(FileProcessor):
     def process_file(self, file_path) -> list[Element]:

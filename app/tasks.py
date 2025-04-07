@@ -171,6 +171,35 @@ def parse_file(self, file_path: str):
             # Handle final failure after retries
             return {'file_name' : file_name, 'file_type' : file_type, 'chunks': None, 'attributes' : None, "status": "failed"}
 
+
+
+@shared_task(bind=True, max_retries=3, retry_backoff=False, countdown=5)
+def parse_graph_file(self, file_path: str):
+    file_type = Path(file_path).suffix[1:]
+    file_name = Path(file_path).name
+    file_size = utils.get_human_readable_file_size(file_path)
+    if file_type == "mp3":
+        audio_processor = AudioFileProcessor()
+        chunks = audio_processor.process_file(file_path)
+    elif file_type == "mp4":
+        video_processor = VideoFileProcessor()
+        chunks = video_processor.process_file(file_path)
+    else:
+        generic_processor = GenericFileProcessor()
+        
+        try:
+            if file_type == 'docx':
+                generic_processor.docx_ocr_replace(input_path=file_path, output_path=file_path)
+            elif file_type == 'xlsx':
+                generic_processor.xlsx_ocr_replace(input_path=file_path, output_path=file_path)
+            elif file_type == 'pptx':
+                generic_processor.pptx_ocr_replace(input_path=file_path, output_path=file_path)
+        except Exception as e:
+            current_app.logger.error(str(e))
+
+        chunks = generic_processor.process_file(file_path)
+    return chunks
+
 @shared_task()
 def cleanup():
     try:

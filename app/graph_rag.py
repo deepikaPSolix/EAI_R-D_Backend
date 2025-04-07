@@ -25,7 +25,9 @@ class GraphProcessor:
         self.st_model = SentenceTransformer("all-MiniLM-L6-v2")
         self.llm = LLMModel.from_together()
         self.index = None
+        self.document_index = None
         self.builder=builder
+        self.document_graph = None
         self.text_units = []
         self.communities = {}
         self.community_summaries = {}
@@ -46,12 +48,11 @@ class GraphProcessor:
         self.community_summaries = self._generate_community_summaries()
 
         self.index = self._build_faiss_index()
-  
+        
         return self._visualize_graph_static(G)
 
     def query_graph(self, query: str,model_name:str):
         """Complete query processing pipeline"""
-        
         query_embedding = self.st_model.encode([query])
         distances, indices = self.index.search(query_embedding, 5)
         retrieved_units = [self.text_units[i] for i in indices[0] if i <len(self.text_units)]
@@ -265,3 +266,126 @@ class GraphProcessor:
         """Read generated HTML content"""
         with open(file_path, "r", encoding="utf-8") as f:
             return f.read()
+        
+    def process_document_data(self, graph_structure: dict):
+        """Process document graph structure for visualization and querying"""
+        try:
+            # Convert document graph to NetworkX format
+            G = nx.Graph()
+            
+            # Add nodes with metadata
+            for node in graph_structure["nodes"]:
+                G.add_node(node["id"], 
+                          label=node["label"],
+                          type=node["type"],
+                          text=node["text"])
+            
+            # Add edges
+            for edge in graph_structure["edges"]:
+                G.add_edge(edge["from"], edge["to"], label=edge["label"])
+            
+            # Store document graph reference
+            self.document_graph = G
+            
+            # Build FAISS index for document chunks
+            chunk_texts = [node["text"] for node in graph_structure["nodes"] 
+                         if node["type"] == "chunk"]
+            self._build_document_faiss_index(chunk_texts)
+            
+            return self._visualize_document_graph()
+        
+        except Exception as e:
+            logger.error(f"Document processing error: {str(e)}")
+            raise
+    def _build_document_faiss_index(self, chunk_texts: List[str]):
+        """Dedicated index for document chunks"""
+        embeddings = self.st_model.encode(chunk_texts)
+        self.document_index = faiss.IndexFlatL2(embeddings.shape[1])
+        self.document_index.add(np.array(embeddings).astype("float32"))
+    def _visualize_document_graph(self):
+        """Specialized visualization for document graphs"""
+        net = Network(height="800px", width="100%", notebook=False)
+        
+        # Add nodes with different styles
+        for node in self.document_graph.nodes(data=True):
+            node_id, data = node
+            net.add_node(
+                node_id,
+                label=data["label"],
+                title=data["text"][:200] + "...",
+                color="#FF9999" if data["type"] == "file" else "#99CCFF",
+                shape="box" if data["type"] == "file" else "dot",
+                size=25 if data["type"] == "file" else 15
+            )
+        
+        # Add edges
+        for edge in self.document_graph.edges(data=True):
+            net.add_edge(edge[0], edge[1], color="#666666", width=1)
+        
+        # Save and return HTML
+        output_path = os.path.join(self.builder.data_dir, "document_graph.html")
+        net.save_graph(output_path)
+        return self._add_document_interactivity(output_path)
+
+    def _add_document_interactivity(self, file_path: str):
+        """Add custom JS for document graph interactions"""
+        with open(file_path, "r+", encoding="utf-8") as f:
+            html = f.read()
+            custom_js = """
+            <script>
+            nodes.on("click", function(params) {
+                if(params.nodes.length > 0) {
+                    const nodeId = params.nodes[0];
+                    const nodeData = nodes.body.data.nodes.get(nodeId);
+                    if(nodeData.type === "chunk") {
+                        displayChunkContent(nodeData.text);
+                    }
+                }
+            });
+            
+            function displayChunkContent(text) {
+                const viewer = document.getElementById("content-viewer");
+                viewer.innerHTML = `<h3>Document Content</h3><p>${text}</p>`;
+            }
+            </script>
+            <div id="content-viewer" style="position: fixed; right: 20px; top: 20px; 
+                width: 300px; background: white; padding: 10px; border: 1px solid #ddd;"></div>
+            """
+            html = html.replace("</body>", f"{custom_js}</body>")
+            f.seek(0)
+            f.write(html)
+            f.truncate()
+        
+        return self._read_html(file_path)
+
+    def query_documents(self, query: str):
+        """Specialized query for document graphs"""
+        if not self.document_index:
+            raise ValueError("Document graph not initialized")
+        
+        # Get top 3 relevant chunks
+        query_embedding = self.st_model.encode([query])
+        distances, indices = self.document_index.search(query_embedding, 5)
+        
+        # Retrieve context from chunks
+        chunk_nodes = [n for n, d in self.document_graph.nodes(data=True) 
+                      if d["type"] == "chunk"]
+        context = "\n".join(
+            self.document_graph.nodes[chunk_nodes[i]]["text"]
+            for i in indices[0] if i < len(chunk_nodes)
+        )
+        
+        # Generate answer with citations
+        prompt = f"""Document Context:\n{context}\n\n
+        Question: {query}\n
+        Answer based on the provided Documents context. Cite relevant sections using [1], [2], etc.
+        If unsure, state 'The documents do not contain clear information about this.'"""
+        
+        response = self.llm.model.invoke(prompt).content.strip()
+        return self._format_document_response(response)
+
+    def _format_document_response(self, response: str):
+        """Format LLM response with document-specific styling"""
+        return {
+            "raw": response
+        }

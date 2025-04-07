@@ -5,6 +5,8 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
 from urllib.parse import urlparse, urljoin
 from typing import Dict, List, Tuple
+from unstructured.partition.text import partition_text
+from unstructured.chunking.title import chunk_by_title
 from app.canon import canonicalize_url, is_internal_link
 import logging
 import json
@@ -13,18 +15,11 @@ import os
 logger = logging.getLogger(__name__)
 
 class GraphBuilder:
-    def __init__(self,data_dir: str = "data"):
+    def __init__(self):
         self.visited = {}
         self.edges = []
-        self.data_dir = data_dir  
-        os.makedirs(self.data_dir, exist_ok=True)
-        self.session = None
-        self._initialize_data_dir()
-    def _initialize_data_dir(self):
-        os.makedirs(self.data_dir, exist_ok=True)
-        logger.info(f"Initialized data directory at {os.path.abspath(self.data_dir)}")
-
     async def _scrape_website(self, url: str, base_url: str):
+        url = url.strip()
         if url in self.visited:
             return []
 
@@ -46,6 +41,7 @@ class GraphBuilder:
             return await self._playwright_fallback(url, base_url)
 
     async def _playwright_fallback(self, url: str, base_url: str):
+        url = url.strip()
         try:
             async with async_playwright() as p:
                 browser = await p.chromium.launch(headless=True)
@@ -70,7 +66,7 @@ class GraphBuilder:
         self.edges = []
         connector = aiohttp.TCPConnector(ssl=False)
         self.session = aiohttp.ClientSession(connector=connector)
-        
+        start_url = start_url.strip()
         to_crawl = [(start_url, 0)]
         while to_crawl:
             current_url, depth = to_crawl.pop(0)
@@ -86,19 +82,24 @@ class GraphBuilder:
             await asyncio.sleep(random.uniform(0.5, 1.5))
         
         await self.session.close()
-        self._save_to_json(self.visited)
-        return self.visited, self.edges
-    def _save_to_json(self, visited: Dict[str, str]):
-        output_file = os.path.join(self.data_dir, "output.json")
-        with open(output_file, "w", encoding="utf-8") as f:
-            json.dump(visited, f, indent=4)
-        logger.info(f"Saved extracted data to {output_file}")
-    def load_scraped_data(self):
-        """Load scraped data from JSON file"""
-        input_file = os.path.join(self.data_dir, "output.json")
-        try:
-            with open(input_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except FileNotFoundError:
-            logger.error(f"No scraped data found at {input_file}")
-            return {}
+        # self._save_to_json(self.visited)
+        return self.visited
+
+    def chunk_text(self, text: str) -> list[dict]:
+        elements = partition_text(text=text)
+        chunks = chunk_by_title(
+            elements,
+            multipage_sections=True,
+            combine_text_under_n_chars=200,
+            new_after_n_chars=1000,
+        )
+        return [{"text": chunk.text.strip()} for chunk in chunks if chunk.text.strip()]
+
+    def chunk_visited_pages(self, visited_pages: dict) -> list[dict]:
+        all_chunks = []
+        for url, content in visited_pages.items():
+            chunks = self.chunk_text(content)
+            for chunk in chunks:
+                chunk["url"] = url  # attach source
+                all_chunks.append(chunk)
+        return all_chunks

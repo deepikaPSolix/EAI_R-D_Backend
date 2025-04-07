@@ -5,7 +5,8 @@ logger = logging.getLogger(__name__)
 
 def canonicalize_url(url: str) -> str:
     try:
-        parsed = urlparse(url)
+       
+        parsed = urlparse(url.strip()) 
         parsed = parsed._replace(fragment="")
         path = parsed.path.rstrip("/") if parsed.path != "/" else parsed.path
         parsed = parsed._replace(path=path)
