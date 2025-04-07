@@ -29,6 +29,7 @@ services:
       - ./cache:/myapp/cache
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
+      - ./cache/graph-file-uploads:/myapp/cache/graph-file-uploads
       - ./cache/uploads:/myapp/cache/uploads
       - ./cache/chroma/db:/myapp/cache/chromadb
       - ./cache/whisper:/root/.cache/whisper
@@ -73,6 +74,7 @@ services:
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
       - ./cache/uploads:/myapp/cache/uploads
+      - ./cache/graph-file-uploads:/myapp/cache/graph-file-uploads
       - ./cache/chroma/db:/myapp/cache/chromadb
       - ./cache/whisper:/root/.cache/whisper
       - ./cache/chroma/models:/root/.cache/chroma
@@ -115,6 +117,7 @@ services:
       - ./cache:/myapp/cache
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
+      - ./cache/graph-file-uploads:/myapp/cache/graph-file-uploads
       - ./cache/uploads:/myapp/cache/uploads
       - ./cache/chroma/db:/myapp/cache/chromadb
       - ./cache/whisper:/root/.cache/whisper

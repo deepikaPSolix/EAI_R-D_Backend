@@ -53,7 +53,7 @@ class GraphFiles():
 
     def get_main_node_label_from_files(self, filenames):
         if len(filenames) == 1:
-            return os.path.splitext(os.path.basename(filenames[0]),'/n')[0]
+            return os.path.splitext(os.path.basename(filenames[0]))[0]
         elif len(filenames) <= 3:
             return ", ".join([os.path.splitext(os.path.basename(f))[0] for f in filenames])
         else:
