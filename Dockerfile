@@ -13,7 +13,8 @@ WORKDIR /myapp
 # Copy only requirements.txt first
 COPY requirements.txt /myapp/
 
-# Install requirements
+RUN pip install --upgrade pip setuptools wheel
+# Install requirementsa
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Install other tooling that you need for final runtime
