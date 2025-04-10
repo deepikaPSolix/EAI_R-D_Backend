@@ -12,7 +12,7 @@ pydantic
 nltk
 pillow
 celery
-chromadb
+chromadb==0.6.3
 redis
 flashrank
 torch
