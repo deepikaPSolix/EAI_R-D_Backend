@@ -19,15 +19,19 @@ class Dashboard:
         # Use LLM to convert response into CSV format
         llm_model = LLMModel(model_source).model
         prompt = f"""
-        You are a data analyst working with an AI visualization system.
+            You are a data analyst working with an AI visualization system.
 
-        From the following text, extract all relevant tabular data and convert it into a **strict, valid CSV format**.
+            From the following text, extract all relevant tabular data and convert it into a **strict, valid CSV format** that is optimized for visual analysis.
 
-        ### Instructions:
-        - Output **must only be raw CSV** — do NOT wrap it in markdown (no ```csv or ```)
-        - This CSV will be parsed directly by a chart generation system (LIDA), so **any formatting error will break it**
-        - Use appropriate column names based on the data.
-        - Only return the CSV (no extra text or commentary).
+            ### Requirements:
+            - Output **only raw CSV** (no markdown or code block formatting).
+            - Use consistent column headers — every row must contain the exact same number of fields.
+            - Avoid placing compound values into a single cell.
+            - Flatten nested data — use one row per record.
+            - Aggregate values by time or category **only if** it adds clarity (e.g. total monthly expenses).
+            - If any value like "Total Cost" appears separately, skip it unless it's part of a structured table.
+            - Always include a clear, sortable column like `Date` or `Category` if applicable.
+            - Keep the data clean and minimal — **don't include metadata or notes**.
 
         ### Text:
         {response}
@@ -36,10 +40,10 @@ class Dashboard:
 
         # Save CSV to disk
         file_name = f"{uuid.uuid4().hex}.csv"
-        output_dir = "cache"
-        os.makedirs(output_dir, exist_ok=True)
-        file_path = os.path.join(output_dir, file_name)
-
+        output_dir = Path("cache/csv")
+        output_dir.mkdir(exist_ok=True)
+        file_path = output_dir / file_name
+      
         with open(file_path, "w") as f:
             f.write(llm_csv_response)
 

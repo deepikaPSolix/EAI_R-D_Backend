@@ -18,6 +18,7 @@ import asyncio
 import re
 from app.dashboard import Dashboard
 import nest_asyncio
+import glob
 
 doc_updates = 0
 
@@ -26,7 +27,7 @@ main = Blueprint('main', __name__)
 @main.route("/")
 def home():
     current_app.logger.info("Welcome to EAI!!!")
-    return "<p>Welcome to EAI!!!</p>"
+    return "<p> Welcome to EAI Application solix docker test!!!</p>"
 
 
 @main.route('/filecontents/<filename>', methods=["GET"])
@@ -143,7 +144,7 @@ def query_rag2():
             dash = Dashboard()
             path=dash.generate_csv_from_response(response=res, model_source="together")
             openai_api_key = os.getenv("OPENAI_API_KEY")
-            chart_link=dash.run_lida_on_csv(path, user_query=data["query"]+", represent in "+data["graph_type"] + "chart ", api_key=openai_api_key)
+            chart_link=dash.run_lida_on_csv(path, user_query= curated_query+", represent in "+data["graph_type"] + "chart ", api_key=openai_api_key)
 
             current_app.logger.info(" Lida : image generated")
             response_json["chart"] = "/"+chart_link
@@ -227,6 +228,13 @@ def delete_docs():
         file_paths = [os.path.join(current_app.config['BASE_DIR'], file_name) for file_name in FILES_TO_CLEAR]
         delete_files(file_paths)
         doc_updates = 0
+        for csv_file in glob.glob("cache/csv/*.csv"):
+            os.remove(csv_file)
+            current_app.logger.info(f"Deleted CSV: {csv_file}")
+
+        for img_file in glob.glob("cache/images/*.png"):
+            os.remove(img_file)
+            current_app.logger.info(f"Deleted image: {img_file}")
         return jsonify({'status': "success"})
     except Exception as e:
         current_app.logger.error(str(e))
