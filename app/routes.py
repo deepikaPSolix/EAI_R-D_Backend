@@ -403,6 +403,7 @@ def docupload():
         G_nx = graph_builder.build_similarity_graph(chunks)
         html_path = graph_builder.render_graph_html(G_nx, min_cluster_size=3,MAX_LABEL_NODES=15)
         current_app.graph_builder = graph_builder
+        current_app.logger.error(f"HTML Visualisation Generated", exc_info=True)
         return Response(html_path, mimetype="text/html")
     except Exception as e:
         current_app.logger.error(str(e), exc_info=True)
@@ -436,27 +437,9 @@ def graph_query():
         # Include the link if it's present
         if links:
             response_json["link"] = links[0]
-
+        current_app.logger.info(f"RESPONSE: {response_json}", exc_info=True)
         return jsonify(response_json)
 
     except Exception as e:
         current_app.logger.error(f"Graph query error: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
-
-
-# @main.route("/graph/querydocs", methods=['POST'])
-# def query_documents():
-#     try:
-#         data = request.get_json()
-#         if not data or "query" not in data:
-#             return jsonify({"error": "Query parameter required"}), 400
-
-#         if not hasattr(current_app, "graph_builder"):
-#             return jsonify({"error": "Graph not initialized. Upload documents first."}), 400
-#         # graph_builder = GraphFiles()
-#         response = current_app.graph_builder.query_graph(data["query"])
-#         return jsonify(response)
-
-#     except Exception as e:
-#         current_app.logger.error(f"Document query error: "+ str(e), exc_info=True)
-#         return jsonify({"error": str(e)}), 500

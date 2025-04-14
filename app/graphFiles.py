@@ -22,7 +22,7 @@ class GraphFiles():
 
         
     def build_similarity_graph(self, chunks, threshold=0.75):
-        current_app.logger.info(f"CHUNKS is created{chunks}")
+        current_app.logger.info(f"CHUNKS are created")
         embeddings = self.st_model.encode(chunks)
         G_nx = nx.Graph()
 
@@ -38,7 +38,7 @@ class GraphFiles():
 
         G_ig = ig.Graph.TupleList(G_nx.edges(), directed=False)
         partition = leidenalg.find_partition(G_ig, leidenalg.ModularityVertexPartition)
-        current_app.logger.info(f"partition is created{partition}")
+        current_app.logger.info(f"Chunk partition is created...")
         for idx, community in enumerate(partition.membership):
             G_nx.nodes[idx]['cluster'] = community
         self.G_nx = G_nx
@@ -88,9 +88,6 @@ class GraphFiles():
                 return raw["text"] if isinstance(raw, dict) else raw
 
             cluster_text = "\n".join([get_clean_text(n) for n in sample_nodes])
-            current_app.logger.info(f"Cluster {cluster} label input:\n{cluster_text}")
-            # cluster_text = "\n".join([str(G_nx.nodes[n]['text']) for n in sample_nodes])
-            # label="CHITTI"
             label = self.generate_cluster_label(cluster_text)
             # Add the cluster node with styling
             G_radial.add_node(cluster_node, label=f"{label} ({len(nodes)})", title=label, color="red", size=15, shape="box")
@@ -157,7 +154,7 @@ class GraphFiles():
         # Join them safely for LLM context
         context = "\n---\n".join(context_chunks)
 
-        current_app.logger.info(f'CONTEXT DATA: {context}')
+        current_app.logger.info(f'CONTEXT DATA SENT')
         return self.generate_query_answer(query, context)
     
     def generate_query_answer(self, query, context):
@@ -200,7 +197,7 @@ class GraphFiles():
         retrieved_texts = "\n---\n".join([
             f"[Section: {unit['section_title']}]\n{unit['text']}" for unit in retrieved_units
         ])
-        current_app.logger.info(f"len_chunks{len(retrieved_texts)}")
+        current_app.logger.info(f"chunks length {len(retrieved_texts)}")
 
         # Format prompt
         prompt = self._format_prompt(query, valid_links, retrieved_texts)

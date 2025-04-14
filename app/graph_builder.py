@@ -3,6 +3,7 @@ import aiohttp
 import random
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright
+from flask import current_app
 from urllib.parse import urlparse, urljoin
 from typing import Dict, List, Tuple
 from unstructured.partition.text import partition_text
@@ -12,7 +13,7 @@ import logging
 import json
 import os
 
-logger = logging.getLogger(__name__)
+
 
 class GraphBuilder:
     def __init__(self):
@@ -37,7 +38,7 @@ class GraphBuilder:
                 self.visited[url] = extracted_text
                 return internal_links
         except Exception as e:
-            logger.warning(f"aiohttp failed: {e}")
+            current_app.logger.warning(f"aiohttp failed: {e}")
             return await self._playwright_fallback(url, base_url)
 
     async def _playwright_fallback(self, url: str, base_url: str):
@@ -54,11 +55,11 @@ class GraphBuilder:
                 links = list(dict.fromkeys([canonicalize_url(urljoin(url, link)) for link in raw_links]))
                 internal_links = [link for link in links if is_internal_link(base_url, link)]
                 self.visited[url] = extracted_text
-                logger.info(f"Extraction of Text is completed...")
+                current_app.logger.info(f"Extraction of Text is completed...")
                 await browser.close()
                 return internal_links
         except Exception as e:
-            logger.error(f"Playwright failed: {e}")
+            current_app.logger.error(f"Playwright failed: {e}")
             return []
 
     async def crawl_website(self, start_url: str, max_depth: int = 1):
@@ -68,21 +69,23 @@ class GraphBuilder:
         self.session = aiohttp.ClientSession(connector=connector)
         start_url = start_url.strip()
         to_crawl = [(start_url, 0)]
+        current_app.logger.info('Crawling the webpages...')
         while to_crawl:
             current_url, depth = to_crawl.pop(0)
             if int(depth) > max_depth:
                 continue
                 
             links = await self._scrape_website(current_url, start_url)
+            
             for link in links:
                 self.edges.append((current_url, link))
                 if link not in self.visited and link not in [u for u, d in to_crawl]:
                     to_crawl.append((link, depth + 1))
-                logger.info('Crawling the webpages...')
             await asyncio.sleep(random.uniform(0.5, 1.5))
-        
+        current_app.logger.info('Crawling DONE...')
         await self.session.close()
         # self._save_to_json(self.visited)
+        
         return self.visited
 
     def chunk_text(self, text: str) -> list[dict]:
