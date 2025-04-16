@@ -133,7 +133,8 @@ def query_rag2():
         combinedList = [ 
             str(res),            
             formatted_data,
-            data["query"]    
+            data["query"],
+            data['model_name']    
         ]
         screen2EvaluationFunction.delay(combinedList)
 

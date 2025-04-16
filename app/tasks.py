@@ -16,6 +16,10 @@ from app.ragEvaluationScreenTwo import TextAnalysis
 import app.utils as utils
 from celery.exceptions import MaxRetriesExceededError
 
+#Postgres
+from app.postgres_db import DatabaseManager
+import os
+
 def process_file_workflow(files: list):
     files_group = []
     for f in files:
@@ -451,6 +455,88 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
     with open("./cache/"+evaluation_result_file, 'w') as file:
         json.dump(data, file, indent=4)
 
+    # print("All Evaluation Data:")
+    # for idx, entry in enumerate(data, start=1):
+    #     print(f"Entry {idx}:")
+    #     for key, value in entry.items():
+    #         print(f"  {key}: {value}")
+    #     print("-" * 40)
+
+    db = DatabaseManager()
+    # Branch 1: Query Evaluation
+    if 'original_query' in evaluation_data:
+        query_response_data = {
+            "query": evaluation_data.get("original_query"),
+            "response": evaluation_data.get("inital_llm_response"),
+            "chatbot": "Solix GPT",
+            "llm_model": "GPT-4",
+            "hallucination": evaluation_scores.get("hallucination", {}).get("score"),
+            "hallucination_reason": evaluation_scores.get("hallucination", {}).get("reason"),
+            "relevance": evaluation_scores.get("answer_relevance", {}).get("score"),
+            "relevance_reason": evaluation_scores.get("answer_relevance", {}).get("reason"),
+            "created_by": "system",
+            "modified_by": "system"
+        }
+        try:
+            db.add_query_response(query_response_data)
+            print("Query response evaluation inserted into PostgreSQL.")
+        except Exception as e:
+            print("Error inserting query response evaluation into PostgreSQL:", e)
+
+    # Branch 2: Cluster Evaluation – use the evaluation result filename to decide if this is a cluster evaluation
+    elif evaluation_result_file == "fileClusterResult.json":
+        # Here, we expect that combinedList[1] is a list containing one dictionary with the key "attributes"
+        if isinstance(combinedList[1], list) and len(combinedList[1]) > 0 and isinstance(combinedList[1][0], dict):
+            attributes_data = combinedList[1][0].get("attributes", [])
+        else:
+            attributes_data = []
+        if attributes_data and isinstance(attributes_data, list):
+            data_category = attributes_data[0].get("label")  # Assume cluster label is consistent for the group
+            file_list = [attr.get("file_name") for attr in attributes_data if attr.get("file_name")]
+            num_files = len(file_list)
+        else:
+            data_category = None
+            file_list = []
+            num_files = 0
+
+        cluster_data = {
+            "data_category": data_category,
+            "num_files": num_files,
+            "file_list": file_list,
+            "relevance": evaluation_scores.get("answer_relevance", {}).get("score", 0.0),
+            "hallucination": evaluation_scores.get("hallucination", {}).get("score", 0.0)
+        }
+        try:
+            db.add_cluster(cluster_data)
+            print("Cluster evaluation inserted/updated into PostgreSQL.")
+        except Exception as e:
+            print("Error inserting cluster evaluation into PostgreSQL:", e)
+
+    # Branch 3: Standard File Evaluation
+    else:
+        file_name_value = evaluation_data.get("file_name")
+        if file_name_value:
+            file_name_value = file_name_value.strip()
+        file_evaluation_data = {
+            "file_name": file_name_value,
+            "hallucination": evaluation_scores.get("hallucination", {}).get("score"),
+            "relevance": evaluation_scores.get("answer_relevance", {}).get("score"),
+            "created_by": "system",
+            "modified_by": "system"
+        }
+        try:
+            db.add_file_evaluation(file_evaluation_data)
+            print("File evaluation inserted/updated into PostgreSQL.")
+        except Exception as e:
+            print("Error inserting file evaluation into PostgreSQL:", e)
+
+
+
+
+    
+    # *******************************************************   
+    
+
     return f"Done with Eval function!!{evaluation_result_file}!!!!"
 
 @shared_task
@@ -459,9 +545,10 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
     This function evaluates the relevance and hallucination scores for a given response
     and context list and saves the results in a JSON file.
     """
+    if len(combinedList)==4:
+        response,context_list,originalQuery, model_name=combinedList
 
-
-    if len(combinedList)==3:
+    elif len(combinedList)==3:
         response,context_list,originalQuery=combinedList
     else:
         response,context_list=combinedList
@@ -502,7 +589,7 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
             'evaluation_scores': evaluation_scores
         }
 
-        if len(combinedList) == 3:
+        if len(combinedList) in (3, 4):
             evaluation_data['original_query'] = originalQuery
 
        
@@ -513,6 +600,29 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
         # Save the updated list back to the file
         with open("./cache/" + evaluation_result_file, 'w') as file:
             json.dump(data, file, indent=4)
+
+        db = DatabaseManager()
+        
+        # Prepare data to insert into query_responses.
+        # Use originalQuery if available; otherwise, you could fallback to data["query"] if that were available.
+        query_response_data = {
+            "query": evaluation_data.get("original_query", ""),  # If originalQuery is absent, you might default to an empty string
+            "response": response,
+            "chatbot": "Solix Governance GPT",
+            "llm_model": model_name,
+            "hallucination": evaluation_scores.get("hallucination_score"),
+            "hallucination_reason": "",  # Optionally include details here
+            "relevance": evaluation_scores.get("relevance_score"),
+            "relevance_reason": "",
+            "created_by": "system",
+            "modified_by": "system"
+        }
+        try:
+            db.add_query_response(query_response_data)
+            print("Screen 2 evaluation record for GPT inserted into PostgreSQL.")
+        except Exception as e:
+            print("Error inserting Screen 2 evaluation record for GPT:", e)
+        # -------- End of New Section --------          
 
         return f"Done with Screen 2 Evaluation function! Results saved to {evaluation_result_file}."
 

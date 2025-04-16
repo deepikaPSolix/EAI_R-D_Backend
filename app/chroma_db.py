@@ -5,6 +5,10 @@ import json
 from flask import current_app
 from pandas import DataFrame
 
+#Postgres
+from app.postgres_db import DatabaseManager
+import os
+
 class ChromaDB:
 
     _instance = None
@@ -51,6 +55,63 @@ class ChromaDB:
                 )
             
             self.collection.add(documents= documents, ids= ids, metadatas= metadatas)
+                        #Postgres DB
+            current_app.logger.info(f"Documents : {documents}, ID: {ids}, Metadata : {metadatas}")            
+            current_app.logger.info(f"Processing {type(ids)} files")
+            current_app.logger.info(f"Processing {type(metadatas)} files")
+            current_app.logger.info(f"Documents : {documents}, ID: {ids}, Metadata : {metadatas}")
+
+
+            for file_id, data in zip(ids, metadatas):
+                current_app.logger.info(f"looping")
+                current_app.logger.info(f"looping {file_id}, {data}")
+                current_app.logger.info("ID: %s", file_id)                
+                current_app.logger.info("Label: %s", data["label"])
+                current_app.logger.info("Sensitivity: %s", data["sensitivity"])
+                current_app.logger.info("Data Classifiers: %s", data["data_classifiers"])
+                current_app.logger.info("Responsible Values: %s", data["responsible_values"])
+                current_app.logger.info("File Name: %s", data["file_name"])
+                current_app.logger.info("Retention Time: %s", (lambda s: 0 if not s.strip() else float(s.split()[0]) + (float(s.split(',')[1].split()[0]) / 12 if ',' in s else 0))(data["retention_time"]))
+                current_app.logger.info("Attributes: %s", data["attributes"])
+                current_app.logger.info("File Size: %s", data["file_size"])
+                current_app.logger.info("Created At: %s", data["created_at"])
+                current_app.logger.info("Word Count: %s", data["word_count"])
+                current_app.logger.info("-----")
+                file_metadata_result = {    'file_id': file_id,
+                                            'file_name': data["file_name"],
+                                            'file_type':  os.path.splitext(data["file_name"])[1].lstrip('.') ,
+                                            'created_time': data["created_at"],
+                                            'last_modification_time': data["created_at"],
+                                            'created_by': " ",
+                                            'modified_by': " ",
+                                            'file_size': data["file_size"]
+                                            }
+
+                file_metadata_classification_result = {'file_id': file_id,
+                                                       'file_name': data["file_name"],
+                                                       'word_count': data["word_count"],
+                                                       'data_category': data["label"],
+                                                       'sensitivity': data["sensitivity"],
+                                                       'data_classifiers': data["data_classifiers"],
+                                                       'responsible_values': data["responsible_values"], 
+                                                       'retention_time': (lambda s: 0 if not s.strip() else float(s.split()[0]) + (float(s.split(',')[1].split()[0]) / 12 if ',' in s else 0))(data["retention_time"]),
+                                                       'word_count' : data["word_count"],
+                                                       'attributes': data["attributes"],
+                                                       'created_by': " ",
+                                                       'modified_by': " ",
+                                                       }
+                current_app.logger.info(f" hit")
+                current_app.logger.info(f"File metadata data: {file_metadata_result}")
+                current_app.logger.info(f"File metadata data classification: {file_metadata_classification_result}")
+
+                try:
+                    db_manager=DatabaseManager()
+                    current_app.logger.info(f" db_manager:{ db_manager}")
+                    db_manager.add_file_metadata(file_metadata_result)
+                    db_manager.add_file_metadata_classification(file_metadata_classification_result)                    
+                except Exception as e:
+                    current_app.logger.error(f"Error in add_file_metadata: {e}")
+            # db_manager.close()
             return True
         except Exception as e:
             print("[add_documents] Exception - " + str(e))
@@ -155,6 +216,10 @@ class ChromaDB:
             collection_name = self.collection.name
             self.chroma_client.delete_collection(name=collection_name)
             self.collection = self.chroma_client.create_collection(name=collection_name)
+            #Postgres
+            db_manager=DatabaseManager()
+            db_manager.delete_all_rows()
+            # db_manager.close()
         except Exception as e:
             current_app.logger.error(str(e))
             print("[delete_all_docs] Exception - " + str(e))
