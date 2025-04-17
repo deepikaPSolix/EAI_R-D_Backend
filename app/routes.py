@@ -18,6 +18,10 @@ import asyncio
 import re
 from app.dashboard import Dashboard
 import nest_asyncio
+from app.hpostgres import store_in_postgres
+#Postgres
+from app.postgres_db import DatabaseManager
+import os
 
 doc_updates = 0
 
@@ -208,6 +212,7 @@ def update_docs():
         # Check if data is not None (i.e., the JSON body was valid)
         if data is None:
             raise ValueError("Missing data in the request body")
+        store_in_postgres(data)
         db = ChromaDB()
         res = db.update_documents(data)
         doc_updates += 1
@@ -224,6 +229,8 @@ def delete_docs():
     global doc_updates
     try:
         ChromaDB().delete_all_docs()
+        db_manager=DatabaseManager()
+        db_manager.delete_all_rows()
         FILES_TO_CLEAR=["queryEvaluationScreen1Results.json","queryEvaluationScreen2Result.json", "sensitivityEvaluation.json", "fileAttributesResult.json","fileClusterResult.json"]
         file_paths = [os.path.join(current_app.config['BASE_DIR'], file_name) for file_name in FILES_TO_CLEAR]
         delete_files(file_paths)

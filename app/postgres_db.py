@@ -177,6 +177,107 @@ class DatabaseManager:
         COMMENT ON COLUMN public.clusters.hallucination IS 'Aggregated hallucination score for the cluster.';
         COMMENT ON COLUMN public.clusters.creation_time IS 'Timestamp when the cluster record was created.';
         COMMENT ON COLUMN public.clusters.last_modification_time IS 'Timestamp when the cluster record was last updated.';
+
+        -- Create human_altered_table
+        CREATE TABLE IF NOT EXISTS public.human_altered_table
+        (
+            file_id                UUID                       PRIMARY KEY,
+            file_name              TEXT                       NOT NULL,
+            data_category          TEXT,
+            sensitivity            TEXT,
+            data_classifiers       TEXT,
+            responsible_values     TEXT,
+            retention_time         NUMERIC,
+            word_count             INTEGER,
+            reason_for_change      TEXT,
+            creation_time          TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            last_modification_time TIMESTAMP WITHOUT TIME ZONE,
+            created_by             TEXT,
+            modified_by            TEXT
+        );
+
+        -- Create hitl_updated_table
+        CREATE TABLE IF NOT EXISTS public.hitl_updated_table
+        (
+            file_id                CHARACTER VARYING         NOT NULL PRIMARY KEY,
+            file_name              CHARACTER VARYING         NOT NULL,
+            data_category          CHARACTER VARYING,
+            sensitivity            CHARACTER VARYING,
+            data_classifiers       CHARACTER VARYING,
+            responsible_values     TEXT,
+            retention_time         NUMERIC,
+            word_count             INTEGER,
+            reason_for_change      TEXT,
+            creation_time          TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT NOW(),
+            last_modification_time TIMESTAMP WITHOUT TIME ZONE,
+            created_by             CHARACTER VARYING,
+            modified_by            CHARACTER VARYING
+        );
+
+        -- Foreign key for human_altered_table.file_id → file_metadata(file_id)
+        
+
+        -- Comments on human_altered_table
+        COMMENT ON TABLE public.human_altered_table IS
+            'Contains detailed classification information generated or modified by human-in-the-loop processes.';
+        COMMENT ON COLUMN public.human_altered_table.file_id IS
+            'Primary key (UUID) and foreign key referencing public.file_metadata(file_id); identifies the file.';
+        COMMENT ON COLUMN public.human_altered_table.file_name IS
+            'Name of the file (redundantly stored for classification context).';
+        COMMENT ON COLUMN public.human_altered_table.data_category IS
+            'Describes what the document is all about.';
+        COMMENT ON COLUMN public.human_altered_table.sensitivity IS
+            'Sensitivity assigned according to categories: Public, Internal, Confidential, Restricted, Private, Critical, Regulatory.';
+        COMMENT ON COLUMN public.human_altered_table.data_classifiers IS
+            'Lists the kinds of data included in the document.';
+        COMMENT ON COLUMN public.human_altered_table.responsible_values IS
+            'Values that determine sensitivity and retention periods.';
+        COMMENT ON COLUMN public.human_altered_table.retention_time IS
+            'Retention period for storing the document (numeric).';
+        COMMENT ON COLUMN public.human_altered_table.word_count IS
+            'Number of words present in the document.';
+        COMMENT ON COLUMN public.human_altered_table.reason_for_change IS
+            'Text explaining why the record was changed by a human in the HITL process.';
+        COMMENT ON COLUMN public.human_altered_table.creation_time IS
+            'Timestamp when the human-altered record was created.';
+        COMMENT ON COLUMN public.human_altered_table.last_modification_time IS
+            'Timestamp when the human-altered record was last updated.';
+        COMMENT ON COLUMN public.human_altered_table.created_by IS
+            'User ID (from USERS) who created the human-altered record.';
+        COMMENT ON COLUMN public.human_altered_table.modified_by IS
+            'User ID (from USERS) who last updated the human-altered record.';
+
+        -- Comments on hitl_updated_table
+        COMMENT ON TABLE public.hitl_updated_table IS
+            'Contains updated classification information consolidated from human-in-the-loop feedback.';
+        COMMENT ON COLUMN public.hitl_updated_table.file_id IS
+            'Primary key and foreign key referencing public.file_metadata(file_id); identifies the file.';
+        COMMENT ON COLUMN public.hitl_updated_table.file_name IS
+            'Name of the file (redundantly stored for classification context).';
+        COMMENT ON COLUMN public.hitl_updated_table.data_category IS
+            'Describes what the document is all about.';
+        COMMENT ON COLUMN public.hitl_updated_table.sensitivity IS
+            'Sensitivity assigned according to categories: Public, Internal, Confidential, Restricted, Private, Critical, Regulatory.';
+        COMMENT ON COLUMN public.hitl_updated_table.data_classifiers IS
+            'Lists the kinds of data included in the document.';
+        COMMENT ON COLUMN public.hitl_updated_table.responsible_values IS
+            'Values that determine sensitivity and retention periods.';
+        COMMENT ON COLUMN public.hitl_updated_table.retention_time IS
+            'Retention period for storing the document (numeric).';
+        COMMENT ON COLUMN public.hitl_updated_table.word_count IS
+            'Number of words present in the document.';
+        COMMENT ON COLUMN public.hitl_updated_table.reason_for_change IS
+            'Text explaining why the record was changed or updated in the HITL workflow.';
+        COMMENT ON COLUMN public.hitl_updated_table.creation_time IS
+            'Timestamp when the updated record was created.';
+        COMMENT ON COLUMN public.hitl_updated_table.last_modification_time IS
+            'Timestamp when the updated record was last updated.';
+        COMMENT ON COLUMN public.hitl_updated_table.created_by IS
+            'User ID (from USERS) who created the updated record.';
+        COMMENT ON COLUMN public.hitl_updated_table.modified_by IS
+            'User ID (from USERS) who last updated the record.';
+
+        
         """
         try:
             self.cur.execute(ddl_script)

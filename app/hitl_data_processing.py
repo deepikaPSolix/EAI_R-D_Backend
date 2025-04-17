@@ -4,6 +4,10 @@ import json
 from datetime import datetime
 from flask import current_app
 
+#Postgres
+from app.postgres_db import DatabaseManager
+import os
+
 DB_CONFIG = {
     "host": "192.168.1.116",
     "database": "postgres",
@@ -17,19 +21,24 @@ def compare_and_update_postgres():
     """ Compares and updates machine-generated data with human-reviewed documents in PostgreSQL. """
 
     try:
+        current_app.logger.info("in compare")
         connection = psycopg2.connect(**DB_CONFIG)
         cursor = connection.cursor()
+        current_app.logger.info(f"Connection:{connection}, Cursor:{cursor}")
 
       
-        machine_df = pd.read_sql_query("SELECT * FROM file_metadata_classifcation", connection)
-        human_df = pd.read_sql_query("SELECT * FROM human_altered_table", connection)  
+        machine_df = pd.read_sql_query("SELECT * FROM public.file_metadata_classification", connection)
+        human_df = pd.read_sql_query("SELECT * FROM public.human_altered_table", connection)  
+        current_app.logger.info(f"machine_df:{machine_df}, human_df:{human_df}")
         
         
         if 'reason_for_change' not in machine_df.columns:
+            current_app.logger.info("in if condition")
             machine_df['reason_for_change'] = "N/A"
             machine_df['created_at']="N/A"
         updated_rows = []
         for _, machine_row in machine_df.iterrows():
+            current_app.logger.info("in for loop")
             human_match = human_df[human_df['file_name'] == machine_row['file_name']]
             if not human_match.empty:
                 human_row = human_match.iloc[0]
@@ -41,44 +50,56 @@ def compare_and_update_postgres():
             else:
                 updated_rows.append(machine_row)
         updated_df = pd.DataFrame(updated_rows)
-        print("PostgreSQL data updated_df_data: ")
+        current_app.logger.info(f"PostgreSQL data updated_df_data: ")
 
         update_query = """
-       INSERT INTO hitl_updated_table (
-            id, file_name, attributes, data_classifiers, label, responsible_values, 
-            retention_time, sensitivity, reason_for_change, created_at
-)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (id) 
-        DO UPDATE SET 
-            file_name = EXCLUDED.file_name,
-            attributes = EXCLUDED.attributes,
-            data_classifiers = EXCLUDED.data_classifiers,
-            label = EXCLUDED.label,
-            responsible_values = EXCLUDED.responsible_values,
-            retention_time = EXCLUDED.retention_time,
-            sensitivity = EXCLUDED.sensitivity,
-            reason_for_change = EXCLUDED.reason_for_change,
-            created_at = EXCLUDED.created_at;
-"""
+        INSERT INTO public.hitl_updated_table (
+            file_id,
+            file_name,
+            data_category,
+            sensitivity,
+            data_classifiers,
+            responsible_values,
+            retention_time,
+            word_count,
+            reason_for_change,
+            creation_time,
+            created_by,
+            modified_by
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        ON CONFLICT (file_id) DO UPDATE SET
+            file_name            = EXCLUDED.file_name,
+            data_category        = EXCLUDED.data_category,
+            sensitivity          = EXCLUDED.sensitivity,
+            data_classifiers     = EXCLUDED.data_classifiers,
+            responsible_values   = EXCLUDED.responsible_values,
+            retention_time       = EXCLUDED.retention_time,
+            word_count           = EXCLUDED.word_count,
+            reason_for_change    = EXCLUDED.reason_for_change,
+            creation_time        = EXCLUDED.creation_time,
+            created_by           = EXCLUDED.created_by,
+            modified_by          = EXCLUDED.modified_by;
+        """
 
         values = [
-    [
-        record['id'],
-        record['file_name'],
-        json.dumps(record['attributes']),
-        record['data_classifiers'],  
-        record['label'],
-        record['responsible_values'],
-        record['retention_time'],
-        record['sensitivity'],
-        record['reason_for_change'],
-        record['created_at']
-    ]
-    for _, record in updated_df.iterrows()
-]
-
-
+            (
+                record['file_id'],                       # file_id
+                record['file_name'],
+                record['data_category'],
+                record['sensitivity'],
+                record['data_classifiers'],
+                record['responsible_values'],
+                record['retention_time'],
+                record['word_count'],
+                record['reason_for_change'],
+                record['creation_time'],                  # creation_time
+                record.get('created_by', 'system'),
+                record.get('modified_by', 'system')
+            )
+            for _, record in updated_df.iterrows()
+        ]
         cursor.executemany(update_query, values)
         connection.commit()
 
