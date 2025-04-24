@@ -77,13 +77,24 @@ class ChromaDB:
                 current_app.logger.info("Created At: %s", data["created_at"])
                 current_app.logger.info("Word Count: %s", data["word_count"])
                 current_app.logger.info("-----")
+                # map numeric codes → descriptive strings
+                SENSITIVITY_LABELS = {
+                    1: "Public Data",
+                    2: "Internal Data",
+                    3: "Confidential Data",
+                    4: "Restricted Data",
+                    5: "Private Data",
+                    6: "Critical Data",
+                    7: "Regulatory Data",
+                }
+
                 file_metadata_result = {    'file_id': file_id,
                                             'file_name': data["file_name"],
                                             'file_type':  os.path.splitext(data["file_name"])[1].lstrip('.') ,
                                             'created_time': data["created_at"],
                                             'last_modification_time': data["created_at"],
-                                            'created_by': " ",
-                                            'modified_by': " ",
+                                            'created_by': "System",
+                                            'modified_by': "System",
                                             'file_size': data["file_size"]
                                             }
 
@@ -91,14 +102,14 @@ class ChromaDB:
                                                        'file_name': data["file_name"],
                                                        'word_count': data["word_count"],
                                                        'data_category': data["label"],
-                                                       'sensitivity': data["sensitivity"],
+                                                       'sensitivity': SENSITIVITY_LABELS.get(int(data["sensitivity"]), data["sensitivity"]),
                                                        'data_classifiers': data["data_classifiers"],
                                                        'responsible_values': data["responsible_values"], 
                                                        'retention_time': (lambda s: 0 if not s.strip() else float(s.split()[0]) + (float(s.split(',')[1].split()[0]) / 12 if ',' in s else 0))(data["retention_time"]),
                                                        'word_count' : data["word_count"],
                                                        'attributes': data["attributes"],
-                                                       'created_by': " ",
-                                                       'modified_by': " ",
+                                                       'created_by': "System",
+                                                       'modified_by': "System",
                                                        }
                 current_app.logger.info(f" hit")
                 current_app.logger.info(f"File metadata data: {file_metadata_result}")

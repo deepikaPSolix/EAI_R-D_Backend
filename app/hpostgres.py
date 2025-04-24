@@ -50,6 +50,33 @@ DB_CONFIG = {
 #         if connection:
 #             connection.close()
 
+# Add this helper at the top of your module
+def parse_retention(rt_str):
+    """
+    Convert strings like "1 year, 6 months" or "18 months" into a numeric
+    value in years (float). Returns None for empty/invalid input.
+    """
+    if not rt_str or not rt_str.strip():
+        return None
+    try:
+        total = 0.0
+        # split on comma: ["1 year", " 6 months"]
+        for part in rt_str.split(','):
+            num, unit = part.strip().split()[:2]
+            n = float(num)
+            if unit.startswith('year'):
+                total += n
+            elif unit.startswith('month'):
+                total += n / 12.0
+            else:
+                total += n  # fallback
+        return total
+    except Exception:
+        try:
+            return float(rt_str)
+        except Exception:
+            return None
+
 
 def clean_text(text):
     """Ensures all escape sequences are properly handled before inserting into PostgreSQL."""
@@ -88,49 +115,54 @@ def store_in_postgres(data_list):
 
         # Updated insert/upsert for human_altered_table with all columns
         insert_query = """
-        INSERT INTO public.human_altered_table (
-            file_id,
-            file_name,
-            data_category,
-            sensitivity,
-            data_classifiers,
-            responsible_values,
-            retention_time,
-            word_count,
-            reason_for_change,
-            creation_time,
-            last_modification_time,
-            created_by,
-            modified_by
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
-        ON CONFLICT (file_id) DO UPDATE SET
-            file_name             = EXCLUDED.file_name,
-            data_category         = EXCLUDED.data_category,
-            sensitivity           = EXCLUDED.sensitivity,
-            data_classifiers      = EXCLUDED.data_classifiers,
-            responsible_values    = EXCLUDED.responsible_values,
-            retention_time        = EXCLUDED.retention_time,
-            word_count            = EXCLUDED.word_count,
-            reason_for_change     = EXCLUDED.reason_for_change,
-            last_modification_time= EXCLUDED.last_modification_time,
-            modified_by           = EXCLUDED.modified_by;
+            INSERT INTO public.human_altered_table (
+                file_id,
+                file_name,
+                data_category,
+                sensitivity,
+                data_classifiers,
+                responsible_values,
+                retention_time,
+                word_count,
+                reason_for_change,
+                creation_time,
+                last_modification_time,
+                created_by,
+                modified_by
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(),NOW(), %s, %s
+            )
+            ON CONFLICT (file_id) DO UPDATE SET
+                file_name             = EXCLUDED.file_name,
+                data_category         = EXCLUDED.data_category,
+                sensitivity           = EXCLUDED.sensitivity,
+                data_classifiers      = EXCLUDED.data_classifiers,
+                responsible_values    = EXCLUDED.responsible_values,
+                retention_time        = EXCLUDED.retention_time,
+                word_count            = EXCLUDED.word_count,
+                reason_for_change     = EXCLUDED.reason_for_change,
+                last_modification_time= EXCLUDED.last_modification_time,
+                modified_by           = EXCLUDED.modified_by;
         """
 
         values = []
+        # map numeric codes → descriptive strings
+        SENSITIVITY_LABELS = {
+            1: "Public Data",
+            2: "Internal Data",
+            3: "Confidential Data",
+            4: "Restricted Data",
+            5: "Private Data",
+            6: "Critical Data",
+            7: "Regulatory Data",
+        }
+
         for record in data_list:
             # Clean and coerce retention_time to None if empty or invalid
             raw_rt = record.get('retention_time')
-            if raw_rt in (None, ''):
-                retention_time_val = None
-            else:
-                try:
-                    retention_time_val = float(raw_rt)
-                except (ValueError, TypeError):
-                    retention_time_val = None
-
-            # word_count is integer (or None)
+            current_app.logger.info(f"raw_rt:{raw_rt}")
+            retention_time_val = parse_retention(raw_rt)
+            current_app.logger.info(f"retention_time_val:{retention_time_val}")            
             word_count_val = record.get('word_count')
             if word_count_val in (None, ''):
                 word_count_val = None
@@ -138,18 +170,25 @@ def store_in_postgres(data_list):
             values.append((
                 record['id'],                                  # file_id
                 clean_text(record['file_name']),
-                clean_text(record.get('data_category', '')),
-                record.get('sensitivity'),
+                clean_text(record.get('label', '')),
+                SENSITIVITY_LABELS.get(int(record['sensitivity']), record['sensitivity']),
                 clean_text(record.get('data_classifiers', '')),
                 clean_text(record.get('responsible_values', '')),
                 retention_time_val,                            # now a float or None
                 word_count_val,                                # integer or None
                 clean_text(record.get('reason_for_change', '')),
-                record.get('created_at'),
-                record.get('last_modification_time'),
-                clean_text(record.get('created_by', '')),
-                clean_text(record.get('modified_by', ''))
+                # record.get('created_at'),
+                # record.get('last_modification_time'),
+                clean_text(record.get('created_by', 'System')),
+                clean_text(record.get('modified_by', 'System'))
             ))
+            current_app.logger.info(f"Values:{values}")
+            current_app.logger.info(
+                "Parsed retention_time for file %s: %r (type: %s)",
+                record['id'],
+                retention_time_val,
+                type(retention_time_val).__name__
+            )
        
         cursor.executemany(insert_query, values)
 

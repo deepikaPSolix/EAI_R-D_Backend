@@ -338,8 +338,8 @@ def fileSensitivityEvalutionFunction():
 def evaluationFunction(combinedList,include_relevance=True, include_hallucination=True,include_moderation=True,evaluation_result_file="noEvaluationFileProvided.json",evaluation_result_csv="noEvaluationCSVProvided.csv",fileName=None):
     rag_evaluator=ragEval()
 
-    if len(combinedList)==4:
-        curated_query, response, top_reranked_docs,originalQuery = combinedList
+    if len(combinedList)==6:
+        curated_query, response, top_reranked_docs,originalQuery, model_name, access_level = combinedList
     else:
         curated_query, response, top_reranked_docs = combinedList
 
@@ -444,7 +444,7 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
     if fileName is not None:
         evaluation_data['file_name'] = fileName
 
-    if len(combinedList) == 4:
+    if len(combinedList) == 6:
         evaluation_data['original_query'] = originalQuery
 
 
@@ -455,27 +455,49 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
     with open("./cache/"+evaluation_result_file, 'w') as file:
         json.dump(data, file, indent=4)
 
-    # print("All Evaluation Data:")
-    # for idx, entry in enumerate(data, start=1):
-    #     print(f"Entry {idx}:")
-    #     for key, value in entry.items():
-    #         print(f"  {key}: {value}")
-    #     print("-" * 40)
+    
 
     db = DatabaseManager()
+   
+
+    current_app.logger.info("evaluation_result_file: %s", evaluation_result_file)
+
     # Branch 1: Query Evaluation
     if 'original_query' in evaluation_data:
+        role=" "     
+        access_level=int(access_level)
+        if access_level == 5:
+            role = "Administrator"
+        elif access_level == 6:
+            role = "Data Governance Officers"
+        elif access_level == 7:
+            role = "Compliance and Legal Teams"
+        else:
+            role = " "
+        MODEL_LABELS = {
+            "llama4":      "Meta Llama 4",
+            "together":    "Meta Llama 3",
+            "openai":      "GPT-4o",
+            "qwen":        "Qwen 2.5",
+            "ollama":      "Llama3 70B local",
+            "qwen_local":  "Qwen 2.5 local",
+            "llama3b":     "Llama 3B local",
+            "llama8b":     "Llama 8B local"
+            }
+        model_name_raw = model_name.lower()
+        model_label = MODEL_LABELS.get(model_name_raw, model_name)
         query_response_data = {
             "query": evaluation_data.get("original_query"),
             "response": evaluation_data.get("inital_llm_response"),
-            "chatbot": "Solix GPT",
-            "llm_model": "GPT-4",
+            "chatbot": "Solix Governance Assistant",
+            "model_for_response_generation": model_label,
+            "evaluation_method": "LLM_as_Judge-Opik",  
             "hallucination": evaluation_scores.get("hallucination", {}).get("score"),
             "hallucination_reason": evaluation_scores.get("hallucination", {}).get("reason"),
             "relevance": evaluation_scores.get("answer_relevance", {}).get("score"),
             "relevance_reason": evaluation_scores.get("answer_relevance", {}).get("reason"),
-            "created_by": "system",
-            "modified_by": "system"
+            "created_by": role,
+            "modified_by": role
         }
         try:
             db.add_query_response(query_response_data)
@@ -485,6 +507,7 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
 
     # Branch 2: Cluster Evaluation – use the evaluation result filename to decide if this is a cluster evaluation
     elif evaluation_result_file == "fileClusterResult.json":
+        current_app.logger.info("→ Entering CLUSTER branch")
         # Here, we expect that combinedList[1] is a list containing one dictionary with the key "attributes"
         if isinstance(combinedList[1], list) and len(combinedList[1]) > 0 and isinstance(combinedList[1][0], dict):
             attributes_data = combinedList[1][0].get("attributes", [])
@@ -514,6 +537,7 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
 
     # Branch 3: Standard File Evaluation
     else:
+        current_app.logger.info("→ Entering FILE branch")
         file_name_value = evaluation_data.get("file_name")
         if file_name_value:
             file_name_value = file_name_value.strip()
@@ -539,14 +563,58 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
 
     return f"Done with Eval function!!{evaluation_result_file}!!!!"
 
+def make_reasons(relevance_score: float, hallucination_score: float):
+    # Relevance Reason
+    if relevance_score is None:
+        relevance_reason = "Relevance could not be calculated."
+    elif relevance_score >= 75:
+        relevance_reason = (
+            f"The response is highly relevant (score: {relevance_score:.1f}%), "
+            "closely matching the user’s query intent."
+        )
+    elif relevance_score >= 40:
+        relevance_reason = (
+            f"The response appears to address the query, but the similarity score is moderate "
+            f"(score: {relevance_score:.1f}%). This may be due to the embedding‐based measure "
+            "underestimating semantic alignment."
+        )
+    else:
+        relevance_reason = (
+            f"The similarity score is low (score: {relevance_score:.1f}%), "
+            "even though the content looks correct. Low cosine‐similarity can occur when wording "
+            "differs substantially from the context embeddings."
+        )
+
+    # Hallucination Reason
+    if hallucination_score is None:
+        hallucination_reason = "Hallucination could not be calculated."
+    elif hallucination_score <= 10:
+        hallucination_reason = (
+            f"Minimal hallucination detected (score: {hallucination_score:.1f}%). "
+            "Almost all content is grounded in the context."
+        )
+    elif hallucination_score <= 30:
+        hallucination_reason = (
+            f"Moderate hallucination detected (score: {hallucination_score:.1f}%). "
+            "Some tokens were not found in the context—this may be due to paraphrasing or synonyms."
+        )
+    else:
+        hallucination_reason = (
+              f"High hallucination detected (score: {hallucination_score:.1f}%). "
+            "The response introduces creative or novel information beyond the context, which can provide fresh insights but should be verified."
+        )
+
+    return relevance_reason, hallucination_reason
+
+
 @shared_task
 def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluationScreen2Result.json"):
     """
     This function evaluates the relevance and hallucination scores for a given response
     and context list and saves the results in a JSON file.
     """
-    if len(combinedList)==4:
-        response,context_list,originalQuery, model_name=combinedList
+    if len(combinedList)==5:
+        response,context_list,originalQuery, model_name, user_role=combinedList
 
     elif len(combinedList)==3:
         response,context_list,originalQuery=combinedList
@@ -602,20 +670,48 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
             json.dump(data, file, indent=4)
 
         db = DatabaseManager()
-        
-        # Prepare data to insert into query_responses.
-        # Use originalQuery if available; otherwise, you could fallback to data["query"] if that were available.
+
+       
+        MODEL_LABELS = {
+            "llama4":      "Meta Llama 4",
+            "together":    "Meta Llama 3",
+            "openai":      "GPT-4o",
+            "qwen":        "Qwen 2.5",
+            "ollama":      "Llama3 70B local",
+            "qwen_local":  "Qwen 2.5 local",
+            "llama3b":     "Llama 3B local",
+            "llama8b":     "Llama 8B local",
+            }
+        model_name_raw = model_name.lower()
+        model_label = MODEL_LABELS.get(model_name_raw, model_name)
+
+        USER_ROLE_LABELS = {
+            "patient": "User 1",
+            "nurse":   "User 2",
+            "doctor":  "User 3",
+        }
+
+        mapped_role = USER_ROLE_LABELS.get(user_role.lower(), user_role)
+
+        # First, pull out your numeric scoresF
+        rel_score = evaluation_scores.get("relevance_score")
+        hall_score = evaluation_scores.get("hallucination_score")
+
+        # Now call your helper:
+        relevance_reason, hallucination_reason = make_reasons(rel_score, hall_score)
+
         query_response_data = {
-            "query": evaluation_data.get("original_query", ""),  # If originalQuery is absent, you might default to an empty string
+            "query": originalQuery, 
             "response": response,
             "chatbot": "Solix Governance GPT",
-            "llm_model": model_name,
+            "model_for_response_generation": model_label,
+            "evaluation_method":"Cosine Similarity",
             "hallucination": evaluation_scores.get("hallucination_score"),
-            "hallucination_reason": "",  # Optionally include details here
+            "hallucination_reason": hallucination_reason, 
             "relevance": evaluation_scores.get("relevance_score"),
-            "relevance_reason": "",
-            "created_by": "system",
-            "modified_by": "system"
+            "relevance_reason": relevance_reason,
+            "created_by": mapped_role,
+            "modified_by": mapped_role
         }
         try:
             db.add_query_response(query_response_data)

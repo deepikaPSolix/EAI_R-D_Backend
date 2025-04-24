@@ -109,7 +109,7 @@ def query_rag():
 
         res = rag.process_user_query(data['query'], data["access_level"])
        
-        combinedList=[res[1],res[0],res[3],data["query"]]
+        combinedList=[res[1],res[0],res[3],data["query"], data['model_name'], data['access_level']]
         evaluationFunction.delay(combinedList,include_relevance=True,include_hallucination=True,include_moderation=False,evaluation_result_file="queryEvaluationScreen1Results.json",evaluation_result_csv="queryEvaluationScreen1Results.csv")
         
 
@@ -138,7 +138,8 @@ def query_rag2():
             str(res),            
             formatted_data,
             data["query"],
-            data['model_name']    
+            data['model_name'],
+             data["user_role"]  
         ]
         screen2EvaluationFunction.delay(combinedList)
 

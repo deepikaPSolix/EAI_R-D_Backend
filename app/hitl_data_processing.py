@@ -35,7 +35,7 @@ def compare_and_update_postgres():
         if 'reason_for_change' not in machine_df.columns:
             current_app.logger.info("in if condition")
             machine_df['reason_for_change'] = "N/A"
-            machine_df['created_at']="N/A"
+            # machine_df['created_at']="N/A"
         updated_rows = []
         for _, machine_row in machine_df.iterrows():
             current_app.logger.info("in for loop")
@@ -53,35 +53,36 @@ def compare_and_update_postgres():
         current_app.logger.info(f"PostgreSQL data updated_df_data: ")
 
         update_query = """
-        INSERT INTO public.hitl_updated_table (
-            file_id,
-            file_name,
-            data_category,
-            sensitivity,
-            data_classifiers,
-            responsible_values,
-            retention_time,
-            word_count,
-            reason_for_change,
-            creation_time,
-            created_by,
-            modified_by
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-        )
-        ON CONFLICT (file_id) DO UPDATE SET
-            file_name            = EXCLUDED.file_name,
-            data_category        = EXCLUDED.data_category,
-            sensitivity          = EXCLUDED.sensitivity,
-            data_classifiers     = EXCLUDED.data_classifiers,
-            responsible_values   = EXCLUDED.responsible_values,
-            retention_time       = EXCLUDED.retention_time,
-            word_count           = EXCLUDED.word_count,
-            reason_for_change    = EXCLUDED.reason_for_change,
-            creation_time        = EXCLUDED.creation_time,
-            created_by           = EXCLUDED.created_by,
-            modified_by          = EXCLUDED.modified_by;
+            INSERT INTO public.hitl_updated_table (
+                file_id,
+                file_name,
+                data_category,
+                sensitivity,
+                data_classifiers,
+                responsible_values,
+                retention_time,
+                word_count,
+                reason_for_change,
+                creation_time,
+                last_modification_time,
+                created_by,
+                modified_by
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s , NOW(), %s, %s
+            )
+            ON CONFLICT (file_id) DO UPDATE SET
+                file_name            = EXCLUDED.file_name,
+                data_category        = EXCLUDED.data_category,
+                sensitivity          = EXCLUDED.sensitivity,
+                data_classifiers     = EXCLUDED.data_classifiers,
+                responsible_values   = EXCLUDED.responsible_values,
+                retention_time       = EXCLUDED.retention_time,
+                word_count           = EXCLUDED.word_count,
+                reason_for_change    = EXCLUDED.reason_for_change,
+                created_by           = EXCLUDED.created_by,
+                modified_by          = EXCLUDED.modified_by;
         """
+
 
         values = [
             (
@@ -94,12 +95,17 @@ def compare_and_update_postgres():
                 record['retention_time'],
                 record['word_count'],
                 record['reason_for_change'],
-                record['creation_time'],                  # creation_time
-                record.get('created_by', 'system'),
-                record.get('modified_by', 'system')
+                record['creation_time'],  
+                record.get('created_by', 'System'),
+                record.get('modified_by', 'System')
             )
             for _, record in updated_df.iterrows()
         ]
+
+        current_app.logger.info(
+            "Retention times (value, type): %s",
+            [(rt, type(rt).__name__) for rt in updated_df['retention_time'].tolist()]
+        )
         cursor.executemany(update_query, values)
         connection.commit()
 
