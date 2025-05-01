@@ -453,12 +453,9 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
 
     # Save the updated list back to the file
     with open("./cache/"+evaluation_result_file, 'w') as file:
-        json.dump(data, file, indent=4)
+        json.dump(data, file, indent=4)   
 
-    
-
-    db = DatabaseManager()
-   
+    db = DatabaseManager()  
 
     current_app.logger.info("evaluation_result_file: %s", evaluation_result_file)
 

@@ -14,43 +14,6 @@ DB_CONFIG = {
     "password": "12345",
     "port": "25432"
 }
-# def create_documents_table():
-#     """Creates the documents table if it does not exist."""
-#     connection = None
-#     cursor = None
-
-#     try:
-#         connection = psycopg2.connect(**DB_CONFIG)
-#         cursor = connection.cursor()
-       
-#         create_table_query = """
-#         CREATE TABLE IF NOT EXISTS human_altered_table (
-#             id UUID PRIMARY KEY,
-#             file_name TEXT NOT NULL,
-#             attributes JSONB NOT NULL,
-#             data_classifiers TEXT,
-#             label TEXT NOT NULL, 
-#             responsible_values TEXT, 
-#             retention_time TEXT,
-#             sensitivity INT,
-#             reason_for_change TEXT,
-#             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-#         );
-#         """
-#         cursor.execute(create_table_query)
-#         connection.commit()
-#         print("[PostgreSQL] Table 'human_altered_table' checked/created successfully.")
-
-#     except Exception as e:
-#         print(f"[PostgreSQL] Error creating table: {e}")
-
-#     finally:
-#         if cursor:
-#             cursor.close()
-#         if connection:
-#             connection.close()
-
-# Add this helper at the top of your module
 def parse_retention(rt_str):
     """
     Convert strings like "1 year, 6 months" or "18 months" into a numeric
@@ -177,8 +140,6 @@ def store_in_postgres(data_list):
                 retention_time_val,                            # now a float or None
                 word_count_val,                                # integer or None
                 clean_text(record.get('reason_for_change', '')),
-                # record.get('created_at'),
-                # record.get('last_modification_time'),
                 clean_text(record.get('created_by', 'System')),
                 clean_text(record.get('modified_by', 'System'))
             ))

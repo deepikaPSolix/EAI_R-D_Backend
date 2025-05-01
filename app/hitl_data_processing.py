@@ -21,24 +21,18 @@ def compare_and_update_postgres():
     """ Compares and updates machine-generated data with human-reviewed documents in PostgreSQL. """
 
     try:
-        current_app.logger.info("in compare")
         connection = psycopg2.connect(**DB_CONFIG)
         cursor = connection.cursor()
-        current_app.logger.info(f"Connection:{connection}, Cursor:{cursor}")
-
-      
+           
         machine_df = pd.read_sql_query("SELECT * FROM public.file_metadata_classification", connection)
         human_df = pd.read_sql_query("SELECT * FROM public.human_altered_table", connection)  
         current_app.logger.info(f"machine_df:{machine_df}, human_df:{human_df}")
         
         
         if 'reason_for_change' not in machine_df.columns:
-            current_app.logger.info("in if condition")
             machine_df['reason_for_change'] = "N/A"
-            # machine_df['created_at']="N/A"
         updated_rows = []
         for _, machine_row in machine_df.iterrows():
-            current_app.logger.info("in for loop")
             human_match = human_df[human_df['file_name'] == machine_row['file_name']]
             if not human_match.empty:
                 human_row = human_match.iloc[0]
@@ -119,4 +113,3 @@ def compare_and_update_postgres():
             cursor.close()
         if connection:
             connection.close()
-# compare_and_update_postgres()
