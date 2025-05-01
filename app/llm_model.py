@@ -46,11 +46,35 @@ class LLMModel:
                 temperature=0.1, 
                 model='meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8'
              )
-        else:
-            base_url = os.getenv("OLLAMA_BASE_URL", "http://192.168.1.116:11434")
+        elif self.model_source == "llama3b":
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://10.1.161.62:11439")
+            return ChatOllama(
+                temperature=0.1, 
+                model='llama3.2:3b', 
+                base_url=base_url,
+                format='json' if self.json_mode else ""
+            )
+        elif self.model_source == "llama8b":
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://10.1.161.62:11438")
             return ChatOllama(
                 temperature=0.1, 
                 model='llama3.1:8b', 
+                base_url=base_url,
+                format='json' if self.json_mode else ""
+            )
+        elif self.model_source == "qwen_local":
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://10.1.161.62:11437")
+            return ChatOllama(
+                temperature=0.1, 
+                model='qwen2.5-coder:32b', 
+                base_url=base_url,
+                format='json' if self.json_mode else ""
+            )
+        else:
+            base_url = os.getenv("OLLAMA_BASE_URL", "http://10.1.161.62:11436")
+            return ChatOllama(
+                temperature=0.1, 
+                model='llama3.1:70b', 
                 base_url=base_url,
                 format='json' if self.json_mode else ""
             )
