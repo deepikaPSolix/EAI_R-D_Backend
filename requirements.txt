@@ -45,3 +45,4 @@ leidenalg
 node2vec
 lida
 lida[infographics]
+hf_xet

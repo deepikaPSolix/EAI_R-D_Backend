@@ -1,17 +1,22 @@
 from flask import current_app
 from lida import Manager, TextGenerationConfig , llm
+from lida.utils import plot_raster
 from app.llm_model import LLMModel
 from app.chroma_db import ChromaDB
 from pathlib import Path
-
 from app.rag import RAG
 from io import StringIO
 import tempfile
 import os
 import uuid
 import json
+import re
+import subprocess
+from pathlib import Path
+from glob import glob
 import pandas as pd
-
+import huggingface_hub as hf
+hf.cached_download = hf.hf_hub_download 
 
 class Dashboard:
     def generate_csv_from_response(self, response, model_source="together"):
@@ -100,7 +105,72 @@ class Dashboard:
             return str(image_path)
         except Exception as e:
             current_app.logger.error(f"Failed to save chart image: {e}")
-            return "Failed to generate the image"
-            raise e
+            return "Failed to generate the image + " + str(e)
+           
+
+        # #generate 3D visulaization of the graphs/dashboards
+        # current_app.logger.info("Calling Lida infographics for 3D visualization")
+
+        # import time
+        # t0 = time.time()
+        # try:
+        #     infographics = lida.infographics(visualization =chart.raster, n=1, style_prompt="generate any 3D graph choose the best colors and pattern ")    
+        #     current_app.logger.info("LIDA infographics generated successfully")
+        #     current_app.logger.info(f'type(plot_raster([chart.raster, infographics["images"][0]]))')
+            
+        # except Exception as e:
+        #     current_app.logger.error(f"Error generating infographics: {e}")
+        #     raise
+        # t1 = time.time()
+        # current_app.logger.info(f"Infographics generation time: {t1 - t0} seconds")
         
+
+
+    def generate_dashboard(self, response):
+        # Define output folders
+        current_app.logger.info("Generating dashboard... with the llm")
+        code_dir = Path("cache/code")
+        image_dir = Path("cache/images")
+        code_dir.mkdir(parents=True, exist_ok=True)
+        image_dir.mkdir(parents=True, exist_ok=True)
+
+        # Extract Python code block from LLM response
+        pattern = r"```python(.*?)```"
+        match = re.search(pattern, response, re.DOTALL)
+        if not match:
+            print("⚠️ No Python code block found.")
+            current_app.logger.info("⚠️ No Python code block found.")
+            return None
+
+        python_code = match.group(1).strip()
+        current_app.logger.info(f"Extracted Python code:\n{python_code}")
+
+        # Create unique filenames
+        uid = uuid.uuid4().hex
+        code_path = code_dir / f"{uid}.py"
+        image_path = image_dir / f"{uid}.png"
+
+        # Append plt.savefig if not included
+        if "plt.savefig" not in python_code:
+            python_code += f"\nimport matplotlib.pyplot as plt\nplt.savefig('{image_path.as_posix()}')\n"
+
+        # Write code to file
+        with open(code_path, "w") as f:
+            f.write(python_code)
+        current_app.logger.info(f"✅Code saved to: {code_path}")
+        # Execute the code
+        try:
+            subprocess.run(["python", str(code_path)], check=True)
+            print(f"✅ Code executed: {code_path}")
+        except subprocess.CalledProcessError as e:
+            print(f"❌ Code execution failed: {e}")
+            return None
+
+        if image_path.exists():
+            current_app.logger.info(f"✅ Chart image saved to: {image_path}")
+        else:
+            current_app.logger.info(f"⚠️ No chart image was created.")
+            return None
+
         
+        return str(image_path)

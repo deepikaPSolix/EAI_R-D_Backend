@@ -11,6 +11,7 @@ from app.rag import RAG
 from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction, parse_graph_file
 from app.utils import delete_files
 from flask import request, jsonify, send_from_directory
+from app.file_processor import AudioFileProcessor
 from langchain.vectorstores import FAISS
 from typing import Dict
 from app.graphFiles import GraphFiles
@@ -19,6 +20,8 @@ import re
 from app.dashboard import Dashboard
 import nest_asyncio
 import glob
+import tempfile
+import subprocess
 
 doc_updates = 0
 
@@ -69,6 +72,34 @@ def cluster_and_classify():
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+@main.route('/api/transcribe', methods=['POST'])
+def transcribe():
+    current_app.logger.info(f"Audio received. Processing .......")
+    if 'audio' not in request.files:
+        return jsonify({'error': 'No audio file provided'}), 400
+
+    audio_file = request.files['audio']
+
+    # Save the uploaded WebM blob
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as f:
+        audio_file.save(f.name)
+        webm_path = f.name
+
+    wav_path = webm_path.replace(".webm", ".wav")
+
+    # Convert to WAV (Whisper prefers it)
+    subprocess.run(['ffmpeg', '-i', webm_path, wav_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    try:
+        processor = AudioFileProcessor()
+        transcript = processor.extract_text_from_audio(wav_path)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        os.remove(webm_path)
+        os.remove(wav_path)
+    current_app.logger.info(f"Transcript is , {transcript}")
+    return jsonify({'transcript': transcript})
 
 @main.route("/docs/classify", methods=['POST'])
 def classify():
@@ -124,7 +155,7 @@ def query_rag2():
             raise ValueError("Missing data in the request body")
 
         rag = RAG(ChromaDB(),model_source=data['model_name'])
-        res,curated_query,top_reranked_docs = rag.process_user_query_screen2(data['query'], data["access_level"], data["user_role"])
+        res,curated_query,top_reranked_docs = rag.process_user_query_screen2(data['query'], data["access_level"], data["user_role"],  data["lida"])
 
         formatted_data = [
             f"filename: {item['file_name']}, text: {item['text']}" for item in top_reranked_docs
@@ -140,19 +171,30 @@ def query_rag2():
 
         response_json = {"response": res}
 
+        pattern = r"```python(.*?)```"
+        clean_response = re.sub(pattern, "", res, flags=re.DOTALL).strip()
+
+        response_json = {"response": clean_response}
+
+        # Remove Python code from the response (if any)
         if(data["lida"] == True):
             dash = Dashboard()
             path=dash.generate_csv_from_response(response=res, model_source="together")
             openai_api_key = os.getenv("OPENAI_API_KEY")
             chart_link=dash.run_lida_on_csv(path, user_query= curated_query+", represent in "+data["graph_type"] + "chart ", api_key=openai_api_key)
-
+            
             current_app.logger.info(" Lida : image generated")
             response_json["chart"] = "/"+chart_link
-        
-        
+
+        else:
+            dash = Dashboard()
+            path2 = dash.generate_dashboard(response=res)
+            if path2 is not None:
+                response_json["chart"] = "/" + path2
+            else:
+                current_app.logger.warning("⚠️ Graph was requested but no chart was generated.")
+                
         return jsonify(response_json)
-        
-    
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
@@ -231,6 +273,10 @@ def delete_docs():
         for csv_file in glob.glob("cache/csv/*.csv"):
             os.remove(csv_file)
             current_app.logger.info(f"Deleted CSV: {csv_file}")
+
+        for python_code in glob.glob("cache/code/*.py"):
+            os.remove(python_code)
+            current_app.logger.info(f"Deleted Code: {python_code}")
 
         for img_file in glob.glob("cache/images/*.png"):
             os.remove(img_file)
