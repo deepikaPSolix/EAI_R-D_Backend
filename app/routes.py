@@ -169,14 +169,25 @@ def query_rag2():
         ]
         screen2EvaluationFunction.delay(combinedList)
 
-        response_json = {"response": res}
-
+        # Graph -> Remove Python code from the response (if any)
         pattern = r"```python(.*?)```"
         clean_response = re.sub(pattern, "", res, flags=re.DOTALL).strip()
 
-        response_json = {"response": clean_response}
+        # Voice feature-- Summary in 50 words
+        summary_prompt = (
+        f"Summarize the following answer in less than or equal to 50 words.\n"
+        f"Curated Query: \"{curated_query}\"\n"
+        f"Answer: \"{clean_response}\"")
 
-        # Remove Python code from the response (if any)
+        summary_resp = rag.model.invoke(summary_prompt)
+        summary_text = summary_resp.content.strip()
+        # voice feature - end
+        
+        response_json = {"response": clean_response}
+        response_json["summary"] = summary_text
+         
+
+        
         if(data["lida"] == True):
             dash = Dashboard()
             path=dash.generate_csv_from_response(response=res, model_source="together")

@@ -19,9 +19,9 @@ class RAG:
         imp_instructions = f'''
         Your task is to optimize the given query for semantic search in a vector database.
 
-    - Correct any misspellings or grammatical errors.
-    - Remove unnecessary details, making the query as straightforward as possible.
-    - Do not output any prefix or suffix; just the rewritten query
+        - Correct any misspellings or grammatical errors.
+        - Remove unnecessary details, making the query as straightforward as possible.
+        - Do not output any prefix or suffix; just the rewritten query
         '''
         response = self.model.invoke(f'''  Query: {query}
         Instructions: {imp_instructions} ''')
@@ -51,10 +51,10 @@ class RAG:
         if not lida:
             prompt += """
            - Based on the data, generate visualizations **only if they add value** to the understanding of the data or insights. 
-        - If the response involves **numerical data**, **trends**, **distributions**, or other comparable data that would benefit from a **graphical representation** (such as a chart, graph, or plot), generate the python code using libraries like `matplotlib`, `plotly`, or others.
-        - **Do not** generate pyhon code if the data is more straightforward where a chart or graph would not provide additional insights. 
-        - **Do not** include any extra information like instructions or explanations about how the Python code will generate the chart (e.g., "This code will generate a chart").
-        - Make a **data-driven decision** like an analyst: generate visualizations/python code **only** when they are necessary to convey the most important aspects of the data or insights. For example, do not visualize simple or categorical data unless there is a trend or pattern worth highlighting.
+            - If the response involves **numerical data**, **trends**, **distributions**, or other comparable data that would benefit from a **graphical representation** (such as a chart, graph, or plot), generate the python code using libraries like `matplotlib`, `plotly`, or others.
+            - **Do not** generate pyhon code if the data is more straightforward where a chart or graph would not provide additional insights. 
+            - **Do not** include any extra information like instructions or explanations about how the Python code will generate the chart (e.g., "This code will generate a chart").
+            - Make a **data-driven decision** like an analyst: generate visualizations/python code **only** when they are necessary to convey the most important aspects of the data or insights. For example, do not visualize simple or categorical data unless there is a trend or pattern worth highlighting.
 
             """
         return prompt
@@ -136,17 +136,7 @@ class RAG:
 
         # Invoke the language model with the constructed prompt
         response = self.model.invoke(context)
-        # response_text = response.content
-
-        # #remove python code from the response
-        # pattern = r'```python(.*?)```'
-        # if re.search(pattern, response_text, re.DOTALL):
-        #     # Python code exists, remove it
-        #     cleaned_response = re.sub(pattern, '', response_text, flags=re.DOTALL).strip()
-        # else:
-        #     # No python code, keep original
-        #     cleaned_response = response_text.strip()
-
+        
         # current_app.logger.info(response)       
         return (response.content,curated_query,top_reranked_docs)
 
