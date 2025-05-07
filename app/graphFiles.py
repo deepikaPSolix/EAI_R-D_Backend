@@ -15,11 +15,12 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 from urllib.parse import urlparse
 from pyvis.network import Network
-DSN="host= 192.168.1.116 dbname= file_metadata_db user= postgres password=12345 port= 5432"
+
 class GraphFiles():
     def __init__(self):
         self.st_model = SentenceTransformer("all-MiniLM-L6-v2")
         self.llm = LLMModel.from_together()
+        self.all_chunks=None
         self.all_embeddings = None
    
     def build_similarity_graph(self, chunks, threshold=0.87, max_chunks_for_graph=1500):
@@ -102,7 +103,7 @@ class GraphFiles():
 
         # Step 6: Store final trimmed graph + embeddings for viz
         self.G_nx = G_trimmed
-        self.graph_id = GraphPostgresStorage(dsn=DSN).save_graph(G_trimmed)
+        self.graph_id = GraphPostgresStorage(dsn=os.getenv("DSN")).save_graph(G_trimmed)
         self.chunk_node_ids = list(G_trimmed.nodes())
         self.chunks = [G_trimmed.nodes[n]["text"] for n in self.chunk_node_ids]
         self.embeddings = self.st_model.encode(self.chunks)
@@ -237,7 +238,7 @@ class GraphFiles():
             node_id_map = {}
             cluster_labels = {}
 
-            conn = psycopg2.connect(DSN)
+            conn = psycopg2.connect(os.getenv("DSN"))
             cur = conn.cursor()
 
             for graph_id, cluster_ids in graph_cluster_map.items():
@@ -278,8 +279,8 @@ class GraphFiles():
             self.G_nx = combined_G
             self.graph_id = None
             self.chunk_node_ids = list(combined_G.nodes())
-            self.chunks = [combined_G.nodes[n]["text"] for n in self.chunk_node_ids]
-            self.embeddings = self.st_model.encode(self.chunks)
+            self.all_chunks = [combined_G.nodes[n]["text"] for n in self.chunk_node_ids]
+            self.all_embeddings = self.st_model.encode(self.all_chunks)
 
             net = Network(height="800px", width="100%", directed=False)
             main_node = "Main"
@@ -329,56 +330,10 @@ class GraphFiles():
 
 
 
-    # def render_selected_clusters_graph(self, G_nx, selected_clusters, MAX_LABEL_NODES=7, threshold=0.84):
-    #     G_radial = nx.Graph()
-    #     main_node = "Main"
-    #     G_radial.add_node(main_node, label="MAIN NODE", title="Combined View", color="orange", size=30)
-
-    #     def get_clean_text(node_id):
-    #         raw = G_nx.nodes[node_id].get("text", "")
-    #         if isinstance(raw, dict):
-    #             raw = raw.get("text", "")
-    #         return str(raw).strip()
-
-    #     def format_tooltip(text: str) -> str:
-    #         lines = text.strip().splitlines()
-    #         formatted = []
-    #         for line in lines:
-    #             if line.strip().endswith(":") or line.strip().istitle():
-    #                 formatted.append(f"<b>{line.strip()}</b>")
-    #             else:
-    #                 formatted.append(line.strip())
-    #         return "<br>".join(formatted)
-
-    #     all_labels = {}
-    #     for cluster_id, node_ids in selected_clusters.items():
-    #         sample_nodes = sample(node_ids, min(len(node_ids), MAX_LABEL_NODES))
-    #         cluster_text = "\n".join([get_clean_text(n) for n in sample_nodes])
-    #         label = self.generate_cluster_label(cluster_text, cluster_id, read_only=True)
-    #         all_labels[cluster_id] = label
-
-    #     for cluster_id, node_ids in selected_clusters.items():
-    #         cluster_node = f"Cluster_{cluster_id}"
-    #         label = all_labels.get(cluster_id, f"Cluster {cluster_id}")
-    #         G_radial.add_node(cluster_node, label=f"{label} ({len(node_ids)})", title=label, color="red", size=15, shape="box")
-    #         G_radial.add_edge(main_node, cluster_node)
-
-    #         for n in sample(node_ids, min(len(node_ids), MAX_LABEL_NODES)):
-    #             sentence = get_clean_text(n)
-    #             tooltip = format_tooltip(sentence[:100] + "..." if len(sentence) > 100 else sentence)
-    #             G_radial.add_node(n, label=" ", title=tooltip, color="lightblue")
-    #             G_radial.add_edge(cluster_node, n)
-
-    #     self.add_all_semantic_edges(G_nx, G_radial, threshold)
-
-    #     net = Network(height="800px", width="100%", directed=False)
-    #     net.from_nx(G_radial)
-    #     net.repulsion(node_distance=150, central_gravity=0.3)
-    #     return net.generate_html()
 
 
     def generate_cluster_label(self, cluster_text: str, cluster_id: int) -> str:
-        conn = psycopg2.connect(DSN)
+        conn = psycopg2.connect(os.getenv("DSN"))
         cur = conn.cursor()
 
         try:
@@ -445,62 +400,6 @@ Each cluster is a group of related topics or concepts. Your goal is to generate 
 
         return label
 
-
-    # def query_graph(self, query: str):
-    #     query_vec = self.st_model.encode([query])[0]
-    #     similarities = cosine_similarity([query_vec], self.embeddings)[0]
-
-    #     top_k = max(5, int(len(self.chunks) * 0.01))
-    #     top_k_idx = np.argsort(similarities)[-top_k:][::-1]
-
-    #     top_clusters = {
-    #         self.G_nx.nodes[i]['cluster']
-    #         for i in top_k_idx
-    #         if 'cluster' in self.G_nx.nodes[i]
-    #     }
-
-    #     cluster_nodes = [
-    #         n for n in self.G_nx.nodes
-    #         if 'cluster' in self.G_nx.nodes[n] and self.G_nx.nodes[n]['cluster'] in top_clusters
-    #     ]
-
-    #     if not top_clusters or not cluster_nodes:
-    #         current_app.logger.info("⚠️ No clusters found. Using only top-k similar chunks.")
-    #         context_node_ids = list(top_k_idx)
-    #     else:
-    #         subgraph = self.G_nx.subgraph(cluster_nodes)
-    #         centrality_scores = nx.pagerank(subgraph)
-    #         ranked_nodes = sorted(centrality_scores.items(), key=lambda x: x[1], reverse=True)
-    #         central_nodes = [node for node, _ in ranked_nodes  [:max(5, int(0.2 * len(ranked_nodes)))]]
-    #         context_node_ids = list(set(central_nodes + list(top_k_idx)))
-
-    #     context_data = [self.G_nx.nodes[n].get("text", "") for n in context_node_ids]
-
-    #     # Make sure every chunk is a string, just in case
-    #     context_chunks = [str(chunk) for chunk in context_data if chunk]
-
-    #     # Join them safely for LLM context
-    #     context = "\n---\n".join(context_chunks)
-
-    #     current_app.logger.info(f'CONTEXT DATA: {context}')
-    #     return self.generate_query_answer(query, context)
-    
-    # def generate_query_answer(self, query, context):
-    #     full_prompt = f"""You are a technical assistant. Based on the context below, provide a **detailed** and **step-by-step** answer to the user's question.
-    #         Context:
-    #         {context}
-    #         User Question:
-    #         {query}
-    #         Instructions:
-    #         - Provide **detailed steps** for the process, including any parameters, options, or settings the user needs to be aware of. use line breaks wherever necessary.
-    #         - Ensure that each step is explained with as much information as possible, including specific UI elements, selections, and actions. use line breaks wherever necessary.
-    #         - Focus on providing comprehensive, actionable, and explicit instructions.
-    #         - if the query: {query} ; involves a process or procedure, break down each phase, highlighting key actions, choices, or configurations.
-    #         - if the query: {query} ; does not have any relevant information in the context, just say "I Don't have Relevant Information".
-            
-    #         Answer:"""
-    #     llm_response = self.llm.model.invoke(full_prompt).content.strip()
-    #     return llm_response
     def query_graph_link_response(self, query: str) -> dict:
         """Query using top chunks to return LLM-generated response + related link"""
         query_vec = self.st_model.encode([query])[0]
@@ -565,8 +464,10 @@ Each cluster is a group of related topics or concepts. Your goal is to generate 
         trimmed_texts = retrieved_texts[:max_input_length]
 #  f"Available Links:\n" + "\n".join(product_links) + "\n\n"
         return (
-    f"You are a helpful assistant. Use the information below to answer the user's question.\n\n"
-    f"""Answer the following query in clear, **Markdown** format.
+    f"""You are a helpful assistant. Answer the user’s question **directly** and **in Markdown**, without prefacing “the context shows…” or echoing back the question. 
+— If you do have enough information in the provided context, just give the answer (with steps or bullets as needed).  
+— If you don’t, respon"d exactly:  
+    I don’t have enough information.
 Use:
 - Numbered lists for steps
 - Bold for headings
@@ -587,7 +488,7 @@ Use:
     "  [Link / source — only if real, available, and useful]\n"
 )
     def load_graph_from_db(self, graph_id: int):
-        storage = GraphPostgresStorage(dsn=DSN)
+        storage = GraphPostgresStorage(dsn=os.getenv("DSN"))
         G_nx = storage.load_graph(graph_id)
 
         # Store graph info for query

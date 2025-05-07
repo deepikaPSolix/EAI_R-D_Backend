@@ -1,5 +1,6 @@
 import json
 import os
+
 from flask import Blueprint, current_app, jsonify, request, send_from_directory, Response
 from openai import NotFoundError
 from celery.result import AsyncResult
@@ -25,7 +26,6 @@ import tempfile
 import subprocess
 import psycopg2
 doc_updates = 0
-DSN="host= 192.168.1.116 dbname= file_metadata_db user= postgres password=12345 port= 5432"
 main = Blueprint('main', __name__)
 
 @main.route("/")
@@ -432,7 +432,7 @@ def process_graph():
         html_content = graph.render_graph_html(G_nx, min_cluster_size=6,MAX_LABEL_NODES=15, threshold=0.98)
         # store_cached_html(key, html_content)
         # store_graph_data(key, graph)  
-        GraphPostgresStorage(DSN).store_graph_metadata(graph_id, source_label=data["url"])
+        GraphPostgresStorage(os.getenv("DSN")).store_graph_metadata(graph_id, source_label=data["url"])
         current_app.graph_builder = graph
         # current_app.graph_cache_key = key
         # GraphSessionHandler.set(graph, key)
@@ -472,7 +472,7 @@ def docupload():
         graph_id,G_nx = graph_builder.build_similarity_graph(chunks)
         html_path = graph_builder.render_graph_html(G_nx, min_cluster_size=1,MAX_LABEL_NODES=15, threshold=0.84)
         
-        GraphPostgresStorage(DSN).store_graph_metadata(graph_id, source_label=", ".join(filenames))
+        GraphPostgresStorage(os.getenv("DSN")).store_graph_metadata(graph_id, source_label=", ".join(filenames))
         current_app.graph_builder = graph_builder
         return Response(html_path, mimetype="text/html")
     except Exception as e:
@@ -492,7 +492,7 @@ def graph_query():
         if not hasattr(current_app, "graph_builder") or not hasattr(current_app.graph_builder, "all_chunks"):
                 # Fallback: load the latest graph from DB
                 graph_builder = GraphFiles()
-                latest_graph_id = GraphPostgresStorage(DSN).list_graphs(limit=1)[0]["id"]
+                latest_graph_id = GraphPostgresStorage(os.getenv("DSN")).list_graphs(limit=1)[0]["id"]
                 graph_builder.load_graph_from_db(latest_graph_id)
                 current_app.graph_builder = graph_builder
         else:
@@ -576,7 +576,7 @@ def extract_main_labels_from_multiple(source_labels):
 @main.route("/graph/graph-cluster-list", methods=["GET"])
 def get_graph_and_clusters():
     try:
-        storage = GraphPostgresStorage(DSN)
+        storage = GraphPostgresStorage(os.getenv("DSN"))
         conn = storage.conn
         cur = conn.cursor()
 
@@ -625,7 +625,7 @@ def get_graph_and_clusters():
 @main.route("/graph/<int:graph_id>/cluster-labels", methods=["GET"])
 def get_cluster_labels(graph_id):
     try:
-        conn = psycopg2.connect(DSN)
+        conn = psycopg2.connect(os.getenv("DSN"))
         cur = conn.cursor()
         cur.execute("""
             SELECT cluster_id, label FROM cluster_labels WHERE graph_id = %s
