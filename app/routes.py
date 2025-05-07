@@ -235,7 +235,7 @@ def delete_docs():
     try:
         ChromaDB().delete_all_docs()
         db_manager=DatabaseManager()
-        db_manager.delete_all_rows()
+        # db_manager.delete_all_rows()
         FILES_TO_CLEAR=["queryEvaluationScreen1Results.json","queryEvaluationScreen2Result.json", "sensitivityEvaluation.json", "fileAttributesResult.json","fileClusterResult.json"]
         file_paths = [os.path.join(current_app.config['BASE_DIR'], file_name) for file_name in FILES_TO_CLEAR]
         delete_files(file_paths)

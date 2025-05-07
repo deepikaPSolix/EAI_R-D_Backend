@@ -8,6 +8,7 @@ from pandas import DataFrame
 #Postgres
 from app.postgres_db import DatabaseManager
 import os
+import datetime
 
 class ChromaDB:
 
@@ -56,7 +57,7 @@ class ChromaDB:
             
             self.collection.add(documents= documents, ids= ids, metadatas= metadatas)
             #Postgres DB
-            
+            current_app.logger.info(f"Start time:{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
             for file_id, data in zip(ids, metadatas):                
                 SENSITIVITY_LABELS = {
                     1: "Public Data",
@@ -101,6 +102,7 @@ class ChromaDB:
                 except Exception as e:
                     current_app.logger.error(f"Error in add_file_metadata: {e}")
             # db_manager.close()
+            current_app.logger.info(f"End time:{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
             return True
         except Exception as e:
             print("[add_documents] Exception - " + str(e))
@@ -206,8 +208,8 @@ class ChromaDB:
             self.chroma_client.delete_collection(name=collection_name)
             self.collection = self.chroma_client.create_collection(name=collection_name)
             #Postgres
-            db_manager=DatabaseManager()
-            db_manager.delete_all_rows()
+            # db_manager=DatabaseManager()
+            # db_manager.delete_all_rows()
         except Exception as e:
             current_app.logger.error(str(e))
             print("[delete_all_docs] Exception - " + str(e))

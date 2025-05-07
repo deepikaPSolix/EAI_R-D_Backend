@@ -189,7 +189,7 @@ class DatabaseManager:
         -- Create human_altered_table
         CREATE TABLE IF NOT EXISTS public.human_altered_table
         (
-            file_id                CHARACTER VARYING          NOT NULL,
+            file_id                CHARACTER VARYING          NOT NULL    UNIQUE,
             file_name              TEXT                       NOT NULL    UNIQUE,
             data_category          TEXT,
             sensitivity            TEXT,
@@ -213,7 +213,7 @@ class DatabaseManager:
         -- Create hitl_updated_table
         CREATE TABLE IF NOT EXISTS public.hitl_updated_table
         (
-            file_id                CHARACTER VARYING         NOT NULL,
+            file_id                CHARACTER VARYING         NOT NULL    UNIQUE,
             file_name              CHARACTER VARYING         NOT NULL    UNIQUE,
             data_category          CHARACTER VARYING,
             sensitivity            CHARACTER VARYING,
