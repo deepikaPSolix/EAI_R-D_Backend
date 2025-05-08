@@ -506,20 +506,21 @@ def graph_query():
         links = re.findall(url_pattern, result["answer"])
         text_without_links = re.sub(url_pattern, "", result["answer"])
         clean_response = re.sub(r"\n+", "\n", text_without_links).strip()
-
-        # Check if the source is a file or a link and format accordingly
-        source = result.get("file")
-     
-        response_json = {
-            "response": clean_response,
-            "source": source if source else ""
-        }
-
-        if clean_response == "**I don't have enough information.**" or clean_response=="I dont't have enough information.":
+        current_app.logger.info("")
+        if clean_response == "**I don't have enough information.**" or clean_response=="I don't have enough information.":
             response_json = {
                 "response": clean_response
             }
-
+        # Check if the source is a file or a link and format accordingly
+        else:
+            source = result.get("file")
+        
+            response_json = {
+                "response": clean_response,
+                "source": source if source else ""
+            }
+        current_app.logger.info(f'CLEAN RESPONSE:{response_json}')
+       
         # Include the link if it's present
         if links:
             response_json["link"] = links[0]
