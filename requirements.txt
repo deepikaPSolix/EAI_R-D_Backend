@@ -14,6 +14,7 @@ pillow
 celery
 chromadb==0.6.3
 redis
+redisgraph
 flashrank
 torch
 torchvision
