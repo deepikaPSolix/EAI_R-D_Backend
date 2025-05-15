@@ -4,7 +4,7 @@ FROM python:3.11-slim AS base
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
       libmagic-dev ffmpeg poppler-utils tesseract-ocr \
-      libreoffice libreoffice-writer libreoffice-core libreoffice-calc libreoffice-impress libreoffice-headless \
+      libreoffice \
       libmagic1 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 \
       libxcomposite1 libxdamage1 && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
