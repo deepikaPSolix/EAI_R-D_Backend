@@ -73,7 +73,7 @@ def cluster_and_classify():
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
-@main.route('/api/transcribe', methods=['POST'])
+@main.route('/transcribe', methods=['POST'])
 def transcribe():
     current_app.logger.info(f"Audio received. Processing .......")
     if 'audio' not in request.files:
