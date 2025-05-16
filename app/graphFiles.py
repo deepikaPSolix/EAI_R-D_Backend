@@ -15,6 +15,8 @@ from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 import numpy as np
 import re
+import ast
+from collections import Counter
 from urllib.parse import urlparse
 from pyvis.network import Network
 
@@ -25,50 +27,124 @@ class GraphFiles():
         self.all_chunks=None
         self.all_embeddings = None
    
+    def _ensure_all_chunks_are_dicts(self):
+        """
+        Normalize self.all_chunks to a list of dicts with 'text' and 'source'.
+        Converts malformed strings, stringified dicts, and fills in missing keys.
+        """
+        valid_chunks = []
+        for idx, chunk in enumerate(self.all_chunks):
+            try:
+                if isinstance(chunk, dict) and "text" in chunk and "source" in chunk:
+                    valid_chunks.append(chunk)
+                elif isinstance(chunk, dict):
+                    valid_chunks.append({
+                        "text": chunk.get("text", ""),
+                        "source": chunk.get("source", "No Source Available")
+                    })
+                elif isinstance(chunk, str):
+                    try:
+                        parsed = ast.literal_eval(chunk)
+                        if isinstance(parsed, dict):
+                            valid_chunks.append({
+                                "text": parsed.get("text", ""),
+                                "source": parsed.get("source", "No Source Available")
+                            })
+                        else:
+                            valid_chunks.append({
+                                "text": str(chunk),
+                                "source": "No Source Available"
+                            })
+                    except Exception:
+                        valid_chunks.append({
+                            "text": str(chunk),
+                            "source": "No Source Available"
+                        })
+                else:
+                    valid_chunks.append({
+                        "text": str(chunk),
+                        "source": "No Source Available"
+                    })
+            except Exception as e:
+                current_app.logger.error(f"⚠️ Failed to normalize chunk at index {idx}: {repr(chunk)} - {e}")
+                valid_chunks.append({
+                    "text": str(chunk),
+                    "source": "No Source Available"
+                })
+
+        self.all_chunks = valid_chunks
+
+
+    def split_source_and_text(self, raw: str):
+        """Split 'source||text' and clean both parts, also remove embedded filename lines."""
+        raw = raw.replace("\x00", "").strip()
+        source = None
+        text = raw
+
+        if "||" in raw:
+            source, text = raw.split("||", 1)
+            source = source.strip()
+            text = text.strip()
+
+        if source:
+            filename = os.path.splitext(os.path.basename(source))[0].lower()
+            cleaned_lines = []
+            for line in text.splitlines():
+                line_lower = line.strip().lower()
+                if filename in line_lower:
+                    continue  # Remove line if it contains filename
+                if all(part in line_lower for part in filename.split()):
+                    continue  # Catch partial match cases
+                cleaned_lines.append(line.strip())
+            text = "\n".join(cleaned_lines)
+
+        return source, text.strip()
+
+
     def build_similarity_graph(self,
                                chunks,
                                threshold: float = 0.85,
                                max_chunks_for_graph: int = 1500):
         current_app.logger.info(f"CHUNKS received: {len(chunks)}")
-        def clean_str(v): return str(v).replace("\x00","") if isinstance(v,str) else v
-
+        
         # 1) Build full NetworkX graph
         G_nx = nx.Graph(); processed_texts = []
         for idx, chunk in enumerate(chunks):
             try:
-                if isinstance(chunk, dict):
-                    text = clean_str(chunk["text"].strip())
-                    url  = clean_str(chunk.get("url",""))
-                    G_nx.add_node(idx, text=chunk, url=url, file_name=chunk.get("file_name",""))
-                    processed_texts.append(text)
-                else:
-                    parsed = None
-                    try: parsed = ast.literal_eval(chunk)
-                    except: pass
-                    if isinstance(parsed, dict):
-                        text = clean_str(parsed["text"].strip())
-                        url  = clean_str(parsed.get("url",""))
-                        G_nx.add_node(idx, text=parsed, url=url, file_name=parsed.get("file_name",""))
-                        processed_texts.append(text)
-                    else:
-                        parts = str(chunk).split("||",1)
-                        if len(parts)==2:
-                            fn, txt = parts
-                            G_nx.add_node(idx, text=txt.strip(), url="", file_name=fn.strip())
-                            processed_texts.append(txt.strip())
-                        else:
-                            ct = clean_str(str(chunk).strip())
-                            G_nx.add_node(idx, text=ct, url="", file_name="")
-                            processed_texts.append(ct)
-            except Exception as e:
-                current_app.logger.warning(f"Node {idx} failed: {e}")
-                ct = clean_str(str(chunk))
-                G_nx.add_node(idx, text=ct, url="", file_name="")
-                processed_texts.append(ct)
+                source = None
+                text = ""
 
-        # 2) Embed all for RAG
-        self.all_chunks     = chunks
-        self.all_embeddings = self.st_model.encode(processed_texts)
+                if isinstance(chunk, str):
+                    try:
+                        parsed = ast.literal_eval(chunk)
+                        if isinstance(parsed, dict):
+                            text = parsed.get("text", "").strip()
+                            source = parsed.get("url", "").strip()
+                        else:
+                            source, text = self.split_source_and_text(chunk)
+                    except Exception:
+                        source, text = self.split_source_and_text(chunk)
+
+                elif isinstance(chunk, dict):
+                    text = chunk.get("text", "").strip()
+                    source = chunk.get("url", "").strip()
+
+                else:
+                    source, text = self.split_source_and_text(str(chunk))
+
+            except Exception as e:
+                current_app.logger.warning(f"⚠️ Failed to process chunk {idx}: {e}")
+                source, text = self.split_source_and_text(str(chunk))
+
+            G_nx.add_node(idx, text=text.strip(), source=source)
+            processed_texts.append(text.strip())
+
+        current_app.logger.info(f"NODES added to full graph: {G_nx.number_of_nodes()}")
+
+        # Step 2: Store for LLM query
+        self.all_chunks = [{"text": G_nx.nodes[n].get("text", ""), "source": G_nx.nodes[n].get("source", "No Source Available")} for n in G_nx.nodes()]
+        self._ensure_all_chunks_are_dicts() 
+        self.all_embeddings = self.st_model.encode([c["text"] for c in self.all_chunks])
 
         # 3) Trim to top-K by mean similarity
         mean_vec = np.mean(self.all_embeddings, axis=0, keepdims=True)
@@ -110,6 +186,11 @@ class GraphFiles():
         return self.graph_id, G_nx
 
 
+
+
+
+
+
     def _redisgraph_expand(self, seed_ids, max_depth=2, limit=20):
         if not seed_ids:
             return []
@@ -119,12 +200,12 @@ class GraphFiles():
         q = f"""
         MATCH (c:Chunk)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
         WHERE c.idx IN [{seed_list}]
-        RETURN DISTINCT x.idx, x.text, x.url, x.file_name
+        RETURN DISTINCT x.idx, x.text, x.source
         LIMIT {limit}
         """
         result = graph.query(q)
         return [
-            {"idx": int(r[0]), "text": r[1], "url": r[2], "file_name": r[3]}
+            {"idx": int(r[0]), "text": r[1], "source": r[2]}
             for r in result.result_set
         ]
     
@@ -265,16 +346,16 @@ class GraphFiles():
                 cluster_ids = [int(cid) for cid in cluster_ids if int(cid) >= 0]
 
                 cur.execute("""
-                    SELECT gn.node_idx, gn.cluster_id, gn.text, gn.file_name, cl.label
+                    SELECT gn.node_idx, gn.cluster_id, gn.text, gn.source, cl.label
                     FROM graph_nodes gn
                     LEFT JOIN cluster_labels cl ON cl.graph_id = gn.graph_id AND cl.cluster_id = gn.cluster_id
                     WHERE gn.graph_id = %s AND gn.cluster_id = ANY(%s)
                 """, (graph_id, cluster_ids))
                 rows = cur.fetchall()
 
-                for node_idx, cluster_id, text, file_name, label in rows:
+                for node_idx, cluster_id, text, source, label in rows:
                     new_id = f"{graph_id}_{node_idx}"
-                    combined_G.add_node(new_id, text=text, cluster=cluster_id, graph_id=graph_id, file_name=file_name)
+                    combined_G.add_node(new_id, text=text, cluster=cluster_id, graph_id=graph_id, source=source)
                     node_id_map[(graph_id, node_idx)] = new_id
                     cluster_labels[(graph_id, cluster_id)] = label or f"Cluster {cluster_id}"
 
@@ -299,8 +380,19 @@ class GraphFiles():
             self.G_nx = combined_G
             self.graph_id = None
             self.chunk_node_ids = list(combined_G.nodes())
-            self.all_chunks = [combined_G.nodes[n]["text"] for n in self.chunk_node_ids]
-            self.all_embeddings = self.st_model.encode(self.all_chunks)
+            self.all_chunks = [
+                    {
+                        "text": combined_G.nodes[n].get("text", ""),
+                        "source": combined_G.nodes[n].get("source", "No Source Available")
+                    }
+                    for n in self.chunk_node_ids
+                ]
+
+            self._ensure_all_chunks_are_dicts()
+
+            self.all_embeddings = self.st_model.encode([
+                chunk["text"] for chunk in self.all_chunks if chunk["text"]
+            ])
 
             net = Network(height="800px", width="100%", directed=False)
             main_node = "Main"
@@ -379,17 +471,17 @@ class GraphFiles():
                 current_app.logger.warning(f"⚠️ Cluster {cluster_id} is empty. Using default label.")
             else:
                 prompt = f"""
-You are an expert language model tasked with labeling semantic clusters in a knowledge graph.
-🧠 Cluster #{cluster_id} Content:
-{cluster_text.strip()}
-🆕 Existing Label:{existing_labels}
-Each cluster is a group of related topics or concepts. Your goal is to generate a **clear, concise, and completely Unique Label** (2–3 words max) that best summarizes the main idea of the cluster **without duplicating or imitating any existing labels**.
-📌 Existing labels in this graph which are given below:
-{chr(10).join(f"- {label}" for label in sorted(existing_labels)) or 'None'}
-❗ VERY IMPORTANT:
-- DO NOT use the same words, synonyms, or vague rephrasings of Existing Label.
-- Only return the label. Do not include explanations, punctuation, or extra text.
-    """.strip()
+                        You are an expert language model tasked with labeling semantic clusters in a knowledge graph.
+                        🧠 Cluster #{cluster_id} Content:
+                        {cluster_text.strip()}
+                        🆕 Existing Label:{existing_labels}
+                        Each cluster is a group of related topics or concepts. Your goal is to generate a **clear, concise, and completely Unique Label** (2–3 words max) that best summarizes the main idea of the cluster **without duplicating or imitating any existing labels**.
+                        📌 Existing labels in this graph which are given below:
+                        {chr(10).join(f"- {label}" for label in sorted(existing_labels)) or 'None'}
+                        ❗ VERY IMPORTANT:
+                        - DO NOT use the same words, synonyms, or vague rephrasings of Existing Label.
+                        - Only return the label. Do not include explanations, punctuation, or extra text.
+                            """.strip()
 
                 response = self.llm.model.invoke(prompt).content.strip()
                 candidate = response or f"Cluster {cluster_id}"
@@ -487,7 +579,20 @@ Each cluster is a group of related topics or concepts. Your goal is to generate 
         if not self.all_chunks or self.all_embeddings is None or len(self.all_embeddings) == 0:
             current_app.logger.warning("⚠️ No chunks or embeddings available; returning fallback.")
             return {"answer": "I don’t have enough information.", "link": None, "file": None}
+        self._ensure_all_chunks_are_dicts()
 
+        for idx, chunk in enumerate(self.all_chunks):
+            if not isinstance(chunk, dict):
+                current_app.logger.error(f"❌ Chunk at index {idx} is NOT a dict: {repr(chunk)}")
+                raise TypeError(f"Invalid chunk format at index {idx}")
+            if "text" not in chunk or "source" not in chunk:
+                current_app.logger.error(f"❌ Chunk at index {idx} missing keys: {chunk}")
+                raise KeyError(f"Missing keys in chunk at index {idx}")
+
+        if self.all_embeddings is None:
+            self.all_embeddings = self.st_model.encode([
+                chunk["text"] for chunk in self.all_chunks
+            ])
         # 3) Seed search (flat cosine)
         Y = np.atleast_2d(self.all_embeddings)
         sims = cosine_similarity([q_emb], Y).flatten()
@@ -521,14 +626,12 @@ Each cluster is a group of related topics or concepts. Your goal is to generate 
                 source_type = "seed"
                 if isinstance(cu, dict):
                     text_val = cu.get("text", "")
-                    url_val  = cu.get("url", "")
-                    fn_val   = cu.get("file_name", "")
-                elif isinstance(cu, str) and "||" in cu:
-                    fn_val, text_val = cu.split("||", 1)
-                    url_val = ""
+                    src_val  = cu.get("source", "")
+                    
+               
                 else:
-                    text_val, url_val, fn_val = str(cu), "", ""
-                u = {"text": text_val, "url": url_val, "file_name": fn_val}
+                    text_val, = str(cu)
+                u = {"text": text_val, "source": src_val}
             u_list.append(u)
 
         # 7) Rerank combined by cosine
@@ -550,11 +653,11 @@ Each cluster is a group of related topics or concepts. Your goal is to generate 
         sources = []   
         for rank, pos in enumerate(top5, start=1):
             u = u_list[pos]
-            src = u["url"] or u["file_name"] or "No Link Available"
-            if u["url"]:
-                sources.append(u["url"])
+            src = u["source"]
+            if u["source"]:
+                sources.append(u["source"])
             snippet = u["text"].replace("\n", " ")[:100]
-            current_app.logger.info(f"   [{rank}] src={src!r}, snippet={snippet!r}")
+            current_app.logger.info(f"   [{rank}] source={src!r}, snippet={snippet!r}")
             units.append(f"**Source:** {src}\n{u['text']}")
 
         context = "\n---\n".join(units)
@@ -562,64 +665,62 @@ Each cluster is a group of related topics or concepts. Your goal is to generate 
 
         # 10) Prompt the LLM
         prompt = (
-        "You are a helpful assistant which generates Response to the given Question below. Respond the user’s Question **directly** and **only** using the context below. "
+        "You are a helpful assistant which generates Response to the given Question below. Respond the user’s Question **directly** and **only** using the context below and only in mardown format. "
         "Do **not** invent any information.\n\n"
         f"Context:\n{context}\n\n"
         f"Question:\n{query}\n\n"
         "**Instructions:**\n"
-        "1. If the context contains enough relevant details—even indirectly—use it to construct your response. \n"
+        "1. If the context contains enough relevant details—even indirectly—use it to construct your response. Please be descriptive. \n"
         "2. If the context contains no relevant information, respond exactly:\n"
-        "   I don’t have enough information. Please dont give source. "
+        "   I don’t have enough information. Please dont give source in this case. "
         
     )
 
         current_app.logger.debug(f"🤖 Prompt to LLM:\n{prompt}")
-
         out = self.llm.model.invoke(prompt).content.strip()
-        current_app.logger.info("✅ Received response from LLM.")
-
+        current_app.logger.info(f"✅ Received response from LLM. {out}")
         # 11) Extract link & file
         link_match = re.search(r"https?://\S+", out)
         link = link_match.group(0) if link_match else None
         if link:
             current_app.logger.info(f"🔗 LLM answer included link: {link}")
-        file_used = next((u["file_name"] for u in u_list if u.get("file_name")), None)
+        file_used = next((u["source"] for u in u_list if u.get("source")), None)
         if file_used:
             current_app.logger.info(f"📄 LLM answer referenced file: {file_used}")
-
+        chosen = sources[0] if sources else None
         clean = re.sub(r"https?://\S+", "", out).strip()
-        return {"answer": clean, "link": link, "file": file_used, "sources": sources}
+        return {"answer": clean, "sources":  file_used or [], "link":link}
 
 
        
-    def _format_prompt(self, query, product_links, retrieved_texts):
-        max_input_length = 6000
-        trimmed_texts = retrieved_texts[:max_input_length]
-#  f"Available Links:\n" + "\n".join(product_links) + "\n\n"
-        return (
-    f"""You are a helpful assistant. Answer the user’s question **directly** and **in Markdown**, without prefacing “the context shows…” or echoing back the question. 
-— If you do have enough information in the provided context, just give the answer (with steps or bullets as needed).  
-— If you don’t have exact information, respon"d exactly:  
-    I don’t have enough information. else, respond related if you find any...
-Use:
-- Numbered lists for steps
-- Bold for headings
-- Line breaks between paragraphs"""
-    f"context:\n{retrieved_texts}\n\n"
+#     def _format_prompt(self, query, product_links, retrieved_texts):
+#         max_input_length = 6000
+#         trimmed_texts = retrieved_texts[:max_input_length]
+# #  f"Available Links:\n" + "\n".join(product_links) + "\n\n"
+#         return (
+#     f"""You are a helpful assistant. Answer the user’s question **directly** and **in Markdown**, without prefacing “the context shows…” or echoing back the question. 
+# — If you do have enough information in the provided context, just give the answer (with steps or bullets as needed).  
+# — If you don’t have exact information, respon"d exactly:  
+#     I don’t have enough information. else, respond related if you find any...
+# Use:
+# - Numbered lists for steps
+# - Bold for headings
+# - Line breaks between paragraphs"""
+#     f"context:\n{retrieved_texts}\n\n"
    
-    f"User Question:\n{query}\n\n"
-    f"Instructions:\n"
-    "- Read the context carefully.\n"
-    "- If the context includes a link relevant to your response, include **only one link** on a new line at the end.\n"
-    "- Do **NOT** include fake links like 'your own generated'or  'No Link Available' or placeholder text.\n"
-    "- If no link is available, **just skip it** — only return the answer.\n"
-    "- If there's no relevant info in the context, return exactly: 'I don't have enough information.' **Do not return any links or sources in this case.**\n"  # Modified this line
-    "- Stick strictly to the context provided. Don't make things up.\n"
-    "- When providing step-by-step instructions, format them using numbered Markdown list syntax.\n"
-    "- Format:\n"
-    "  [Answer]\n"
-    "  [Link / source — only if real, available, and useful]\n"
-)
+#     f"User Question:\n{query}\n\n"
+#     f"Instructions:\n"
+#     "- Read the context carefully.\n"
+#     "- If the context includes a link relevant to your response, include **only one link** on a new line at the end.\n"
+#     "- Do **NOT** include fake links like 'your own generated'or  'No Link Available' or placeholder text.\n"
+#     "- If no link is available, **just skip it** — only return the answer.\n"
+#     "- If there's no relevant info in the context, return exactly: 'I don't have enough information.' **Do not return any links or sources in this case.**\n"  # Modified this line
+#     "- Stick strictly to the context provided. Don't make things up.\n"
+#     "- When providing step-by-step instructions, format them using numbered Markdown list syntax.\n"
+#     "- Format:\n"
+#     "  [Answer]\n"
+#     "  [Link / source — only if real, available, and useful]\n"
+# )
     def load_graph_from_db(self, graph_id: int):
         storage = GraphPostgresStorage(dsn=os.getenv("DSN"))
         G_nx = storage.load_graph(graph_id)
@@ -631,19 +732,32 @@ Use:
         self.chunks = [G_nx.nodes[n].get("text", "") for n in self.chunk_node_ids]
 
         # --- NEW: Build all_chunks with url from the node attributes ---
-        self.all_chunks = [
-            {
-                "text":   G_nx.nodes[n].get("text", ""),
-                "file_name": G_nx.nodes[n].get("file_name"," "),
-                "url":    G_nx.nodes[n].get("url", "No Link Available")
-            }
-            for n in self.chunk_node_ids
-        ]
+        self.all_chunks = []
+        for n in self.chunk_node_ids:
+            text = G_nx.nodes[n].get("text", "")
+            source = G_nx.nodes[n].get("source")
+
+            # Strip embedded source again
+            if source and isinstance(source, str):
+                filename = os.path.splitext(os.path.basename(source))[0].strip()
+                if filename:
+                    text_lines = [
+                        line for line in text.splitlines()
+                        if filename.lower() not in line.lower()
+                    ]
+                    text = "\n".join(text_lines).strip()
+
+            if not source or str(source).strip().lower() in {"", "none", "null"}:
+                source = getattr(self, "source_url", "No Source Available")
+
+            self.all_chunks.append({
+                "text": text,
+                "source":source})
 
         self.all_embeddings = self.st_model.encode(
             [chunk["text"] for chunk in self.all_chunks if chunk["text"]]
         )
-
+        self._ensure_all_chunks_are_dicts()
 
 
         # inside GraphFiles in graphfiles.py

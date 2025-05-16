@@ -500,31 +500,32 @@ def graph_query():
 
         # 1) Query your graph + LLM
         result = graph_builder.query_graph_link_response(data["query"])
-
+        res=result.get('answer','').strip()
+        source=result.get('sources','').strip()
         # 2) Strip out any links in the LLM’s answer
         url_pattern = r"https?://\S+"
-        links = re.findall(url_pattern, result["answer"])
+        links = re.findall(url_pattern, source)
         clean_text = re.sub(url_pattern, "", result["answer"]).strip()
-
-        # 3) ALWAYS initialize response_json
+        
+        # # 3) ALWAYS initialize response_json
         response_json = {"response": clean_text}
-
+        if res.lower() == "i don't have enough information.":
+            response_json = {
+                "response": clean_text
+            }
+       
+        # current_app.logger.info(f"✅ Graph Query Result: {response_json}")
         # 4) If LLM returned a filename, build our download URL
-        filename = result.get("file")
-        if filename:
-            file_url = url_for(
-                'main.download_graph_file',
-                filename=filename,
-                _external=True
-            )
-            response_json["sources"] = [
-                {"name": filename, "url": file_url}
-            ]
-
+        filename = result.get("sources","")
         # 5) If there was a real link in the answer, include it too
         if links:
             response_json["link"] = links[0]
-
+        else:
+            file_url = url_for('main.download_graph_file', filename=filename, _external=True)
+            response_json["sources"] = [{ "name": filename, "url": file_url }]
+            response_json["sources"] = [
+                {"name": filename, "url": file_url}
+            ]
         # current_app.logger.info(f'RESPONSE JSON: {response_json}')
         return jsonify(response_json)
 

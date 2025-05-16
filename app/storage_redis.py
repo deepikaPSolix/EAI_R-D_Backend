@@ -41,8 +41,7 @@ class GraphRedisStorage:
             props = {
                 "idx":       idx,
                 "text":      text_val,
-                "url":       data.get("url", ""),
-                "file_name": data.get("file_name", ""),
+                'source': data.get('source',''),
                 "cluster":   int(data.get("cluster", -1))
             }
 
