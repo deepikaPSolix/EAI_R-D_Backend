@@ -1,5 +1,4 @@
 # app/graphbuilder.py
-
 import os
 import asyncio
 import logging
@@ -7,7 +6,6 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin
 from unstructured.partition.text import partition_text
 from unstructured.chunking.title import chunk_by_title
-
 from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
 from crawl4ai.async_dispatcher import SemaphoreDispatcher
 from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
@@ -18,31 +16,26 @@ logger = logging.getLogger(__name__)
 
 class GraphBuilder:
     def __init__(self, concurrency: int = 10):
-        self.visited = {}  # url -> {"text":..., "anchors":[...] }
+        self.visited = {}  
         self.edges   = []
         self.concurrency = concurrency
-
-        
 
     async def crawl_website(self, start_url: str, max_depth: int = 1):
         concurrency: int = 20
         strategy = BFSDeepCrawlStrategy(
-        max_depth=max_depth,            # how many hops away
-        include_external=False          # stay in-domain
+        max_depth=max_depth,            
+        include_external=False          
     )
 
-        # 2. Configure run: set high semaphore_count for parallelism
         run_cfg = CrawlerRunConfig(
             deep_crawl_strategy=strategy,
             scraping_strategy=LXMLWebScrapingStrategy(),
             stream=False,
-            semaphore_count=concurrency     # bump default from 5 to 20
+            semaphore_count=concurrency     
         )
 
-        # 3. (Optional) Explicit fixed-concurrency dispatcher
         dispatcher = SemaphoreDispatcher(concurrency)
 
-        # 4. Run crawler with updated config and dispatcher
         async with AsyncWebCrawler() as crawler:
             results = await crawler.arun(
                 url=start_url,
@@ -50,7 +43,6 @@ class GraphBuilder:
                 dispatcher=dispatcher
             )
 
-        # 5. Parse results into JSON-friendly list
         output = []
         for result in results:
             if not result.success:
@@ -65,7 +57,6 @@ class GraphBuilder:
         elements = partition_text(text=text)
         total    = sum(len(el.text or "") for el in elements)
 
-        # dynamic sizing
         if total <= 50_000:
             max_chars = 600
         elif total <= 200_000:
@@ -87,13 +78,11 @@ class GraphBuilder:
 
     def chunk_visited_pages(self, visited_pages: list[dict]) -> list[dict]:
         all_chunks = []
-    # visited_pages is now a list of {"url", "text"} dicts
         for page in visited_pages:
             url, text = page["url"], page["text"]
-            # 1) big‐text chunks
             for c in self.chunk_text(text):
                 c["url"] = url
                 all_chunks.append(c)
             # 2) if you had anchors, add them here …
-        logger.info(f"Generated total {len(all_chunks)} chunks")
+        # logger.info(f"Generated total {len(all_chunks)} chunks")
         return all_chunks

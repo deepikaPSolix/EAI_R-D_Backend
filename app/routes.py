@@ -452,7 +452,6 @@ def docupload():
         current_app.logger.info("FILES ARE BEING PROCESSED..... Hold UP!")
         saved_files = []
         filenames = []
-        # Save uploaded files
         for file in files:
             if file.filename == '':
                 return jsonify({"error": "Empty filename"}), 400
@@ -465,10 +464,10 @@ def docupload():
         chunks = []
         for file_path in saved_files:
             filename = os.path.basename(file_path)
-            chunk_list = [f"{filename}||{chunk.text}" for chunk in parse_graph_file(file_path)]  # ⬅️ Add filename inside the chunk with separator
+            chunk_list = [f"{filename}||{chunk.text}" for chunk in parse_graph_file(file_path)]  
             chunks.extend(chunk_list)
         current_app.logger.info("CHUNKS CREATED :)")
-        current_app.logger.info(f"CHUNKS from FileUploads : {chunks[0]}")
+        # current_app.logger.info(f"CHUNKS from FileUploads : {chunks[0]}")
         graph_builder = GraphFiles()
         graph_builder.file_names = filenames
         graph_id,G_nx = graph_builder.build_similarity_graph(chunks)
@@ -488,7 +487,6 @@ def graph_query():
         if not data or "query" not in data:
             return jsonify({"error": "Query parameter required"}), 400
 
-        # Ensure graph is loaded
         if not hasattr(current_app, "graph_builder"):
             return jsonify({"error": "Graph not ready. Please upload first."}), 400
 
@@ -498,16 +496,13 @@ def graph_query():
             graph_builder.load_graph_from_redis()
             current_app.graph_builder = graph_builder
 
-        # 1) Query your graph + LLM
         result = graph_builder.query_graph_link_response(data["query"])
-        res=result.get('answer','').strip()
-        source=result.get('sources','').strip()
-        # 2) Strip out any links in the LLM’s answer
+        res = (result.get('answer') or '').strip()
+        source = (result.get('sources') or '').strip()
         url_pattern = r"https?://\S+"
         links = re.findall(url_pattern, source)
         clean_text = re.sub(url_pattern, "", result["answer"]).strip()
         
-        # # 3) ALWAYS initialize response_json
         response_json = {"response": clean_text}
         if res.lower() == "i don't have enough information.":
             response_json = {
@@ -515,18 +510,18 @@ def graph_query():
             }
        
         # current_app.logger.info(f"✅ Graph Query Result: {response_json}")
-        # 4) If LLM returned a filename, build our download URL
         filename = result.get("sources","")
-        # 5) If there was a real link in the answer, include it too
         if links:
             response_json["link"] = links[0]
         else:
-            file_url = url_for('main.download_graph_file', filename=filename, _external=True)
-            response_json["sources"] = [{ "name": filename, "url": file_url }]
-            response_json["sources"] = [
-                {"name": filename, "url": file_url}
-            ]
-        # current_app.logger.info(f'RESPONSE JSON: {response_json}')
+            filename = result.get("sources", "")
+            if filename:
+                try:
+                    file_url = url_for('main.download_graph_file', filename=filename, _external=True)
+                    response_json["sources"] = [{"name": filename, "url": file_url}]
+                except Exception as e:
+                    current_app.logger.warning(f"⚠️ Skipped building file URL due to: {e}")
+
         return jsonify(response_json)
 
     except Exception as e:
@@ -552,14 +547,12 @@ def render_semantic_cluster_merge():
         graph = GraphFiles()
         html = graph.render_combined_clusters_to_single_graph(data)
 
-        current_app.graph_builder = graph  # Crucial for /graph/query to work!
+        current_app.graph_builder = graph  
 
         return Response(html, mimetype="text/html")
     except Exception as e:
         current_app.logger.error(f"Error in merged cluster view: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
-
-
 
 def extract_main_label(source_label):
     if not source_label:
@@ -583,7 +576,6 @@ def extract_main_labels_from_multiple(source_labels):
     main_labels = [extract_main_label(name) for name in filenames]
 
     return ", ".join(main_labels)
-
 
 
 @main.route("/graph/graph-cluster-list", methods=["GET"])

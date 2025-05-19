@@ -60,7 +60,6 @@ class GraphPostgresStorage:
 
         with self.conn:
             with self.conn.cursor() as cur:
-                # Insert graph metadata
                 cur.execute("""
                     INSERT INTO graphs (source_label, created_at)
                     VALUES (%s, %s)
@@ -74,7 +73,6 @@ class GraphPostgresStorage:
                     cluster_id = int(data.get("cluster", -1))
                     source=clean(data.get('source'))
 
-                    # Clean and assign text and url
                     if isinstance(raw_text, dict):
                         text = clean(raw_text.get("text", ""))
                     else:
@@ -88,18 +86,16 @@ class GraphPostgresStorage:
                         text
                     ))
 
-                # 🚀 Insert all nodes
                 execute_values(cur, """
                     INSERT INTO graph_nodes (graph_id, cluster_id, node_idx, source, text)
                     VALUES %s
                 """, node_data)
 
-                # Insert all edges
                 edge_data = [
     (
         int(graph_id),
-        int(u),         # <-- cast here
-        int(v),         # <-- and here
+        int(u),         
+        int(v),         
         float(data.get('weight', 1.0))
     )
     for u, v, data in G_nx.edges(data=True)]
