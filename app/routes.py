@@ -25,6 +25,8 @@ import glob
 import tempfile
 import subprocess
 import psycopg2
+from docx import Document
+from app.vanna_class import MyVanna
 doc_updates = 0
 main = Blueprint('main', __name__)
 
@@ -126,6 +128,71 @@ def classify():
 
     return jsonify({"labels": labels.to_json(orient='records')}), 201
 
+@main.route('/docs/train/vanna', methods=["POST"])
+def train_vanna():
+    try:
+        vn = MyVanna()
+        res = ""
+
+        if 'files' not in request.files:
+            return jsonify({"error": "No files provided"}), 400
+        
+        files = request.files.getlist('files')
+
+        for file in files:
+            if file.filename == '':
+                return jsonify({"error": "Empty filename"}), 400
+            document = Document(file)
+            doc_arr = []
+            for para in document.paragraphs:
+                # Chunk if the document is so large that it raises MemoryError
+                try:
+                    doc_arr.append(para.text)
+                except MemoryError as e:
+                    res += vn.train(documentation="\n".join(doc_arr))
+                    doc_arr = []
+            if doc_arr:
+                res += vn.train(documentation="\n".join(doc_arr))
+
+        return jsonify({"res": res}), 202
+    except Exception as e:
+        current_app.logger.error(str(e))
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+@main.route('/docs/vanna', methods=["DELETE"])
+def get_vanna_training_data():
+    vn = MyVanna()
+    res = []
+    df = vn.get_training_data()
+    id_list = df["id"].tolist()
+    for id in id_list:
+        removed = vn.remove_training_data(id=id)
+        res.append({"id": id, "removed" : removed})
+    return res, 202
+
+
+@main.route('/rag2/query/vanna', methods=["POST"])
+def query_vanna(data=None):
+    try:
+        if data is None:
+            data = request.get_json()
+        if data is None:
+            raise ValueError("Missing data in the request body")
+
+        vn = MyVanna()
+
+        sql, df, _ = vn.ask(
+            question=data['data'],
+            print_results=False,
+            auto_train=True,
+            visualize=False,
+            allow_llm_to_see_data=False
+        )
+        
+        return jsonify({"generated_sql": sql, "query_result": df.to_json(orient='records') if df is not None else None})
+    except Exception as e:
+        current_app.logger.error(str(e), exc_info=True)
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 @main.route('/rag/query', methods=["POST"])
 def query_rag():

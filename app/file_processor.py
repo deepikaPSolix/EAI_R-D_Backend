@@ -98,7 +98,7 @@ class GenericFileProcessor(FileProcessor):
             # Convert paragraph XML to lxml element for proper namespace handling
             p_xml = paragraph._p.xml
             p_tree = etree.fromstring(p_xml)
-            paragraph.text = ''  # Clear the paragraph text
+            # paragraph.text = ''  # Clear the paragraph text
 
             # Find all images in this paragraph
             for pic in p_tree.xpath('.//pic:pic', namespaces=namespaces):
