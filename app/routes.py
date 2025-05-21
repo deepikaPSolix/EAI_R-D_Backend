@@ -128,48 +128,92 @@ def classify():
 
     return jsonify({"labels": labels.to_json(orient='records')}), 201
 
-@main.route('/docs/train/vanna', methods=["POST"])
-def train_vanna():
+@main.route('/vanna/train/doc', methods=["POST"])
+def train_vanna_doc():
     try:
         vn = MyVanna()
-        res = ""
-
-        if 'files' not in request.files:
+        
+        data = request.get_json()
+        if data is None:
             return jsonify({"error": "No files provided"}), 400
         
-        files = request.files.getlist('files')
+        res = vn.train(documentation=data["file_data"])
+        vn.add_document(db_id=res, doc_id=data["file_id"])
+        current_app.logger.info(f"✅ Added documentation to vanna chroma:\n{res}\n")
 
-        for file in files:
-            if file.filename == '':
-                return jsonify({"error": "Empty filename"}), 400
-            document = Document(file)
-            doc_arr = []
-            for para in document.paragraphs:
-                # Chunk if the document is so large that it raises MemoryError
-                try:
-                    doc_arr.append(para.text)
-                except MemoryError as e:
-                    res += vn.train(documentation="\n".join(doc_arr))
-                    doc_arr = []
-            if doc_arr:
-                res += vn.train(documentation="\n".join(doc_arr))
+        return jsonify({"ids": [res]}), 202
+    except Exception as e:
+        current_app.logger.error(str(e))
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+@main.route('/vanna/train/ddl', methods=["POST"])
+def train_vanna_ddl():
+    try:
+        vn = MyVanna()
+        res = []
+        
+        data = request.get_json()
+        if data is None:
+            return jsonify({"error": "No files provided"}), 400
+        
+        full_text = data["file_data"]
+        ddl_statements = re.findall(r'CREATE TABLE.*?\);', full_text, re.DOTALL | re.IGNORECASE)
+        
+        for ddl in ddl_statements:
+            res.append(vn.train(ddl=ddl))
+            vn.add_document(db_id=res[-1], doc_id=data["file_id"])
 
-        return jsonify({"res": res}), 202
+        current_app.logger.info(f"✅ Added {str(len(ddl_statements))} DDL to vanna chroma:\n{res}\n")
+        return jsonify({"ids": res}), 202
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     
 @main.route('/docs/vanna', methods=["DELETE"])
-def get_vanna_training_data():
+def del_vanna_training_data():
     vn = MyVanna()
     res = []
     df = vn.get_training_data()
     id_list = df["id"].tolist()
     for id in id_list:
         removed = vn.remove_training_data(id=id)
+        vn.delete_document(id)
         res.append({"id": id, "removed" : removed})
     return res, 202
 
+@main.route('/docs/vanna/id/<id>', methods=["DELETE"])
+def del_vanna_training_data_by_id(id):
+    vn = MyVanna()
+    removed = vn.remove_training_data(id=id)
+    vn.delete_document(id)
+    return jsonify({"id": id, "removed" : removed}), 202
+
+@main.route('/docs/vanna', methods=["GET"])
+def get_vanna_training_data():
+    vn = MyVanna()
+    df = vn.get_training_data()
+    current_app.logger.info("Vanna df size: " + str(len(df)))
+    df_dict = df.to_dict()
+    current_app.logger.info("Vanna df_dict size: " + str(len(df_dict['id'])))
+    print("Total rows:", len(df))
+    print("id column length:", len(df['id']))
+    print("id column nulls:", df['id'].isnull().sum())
+    print("df_dict['id'] length:", len(df_dict['id']))
+    df_list = df.to_dict(orient='list')
+    current_app.logger.info("Vanna df list: " + str(df_list))
+    print("df_list",df_list)
+
+
+
+    return df_dict, 202
+
+@main.route('/docs/vanna/id/<id>', methods=["GET"])
+def get_vanna_doc_from_db_id(id):
+    vn = MyVanna()
+    doc_id = vn.get_document(id)
+    if doc_id is None:
+        return jsonify({"error": "Document not found"}), 404
+    return doc_id, 202
 
 @main.route('/rag2/query/vanna', methods=["POST"])
 def query_vanna(data=None):
@@ -178,18 +222,18 @@ def query_vanna(data=None):
             data = request.get_json()
         if data is None:
             raise ValueError("Missing data in the request body")
-
         vn = MyVanna()
 
+        current_app.logger.info(f"Vanna query: {data['query']}")
         sql, df, _ = vn.ask(
-            question=data['data'],
+            question=data["query"],
             print_results=False,
             auto_train=True,
             visualize=False,
             allow_llm_to_see_data=False
         )
         
-        return jsonify({"generated_sql": sql, "query_result": df.to_json(orient='records') if df is not None else None})
+        return jsonify({"response": sql, "query_result": df.to_json(orient='records') if df is not None else None})
     except Exception as e:
         current_app.logger.error(str(e), exc_info=True)
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
