@@ -1,5 +1,6 @@
 import json
 import os
+
 from flask import Blueprint, current_app, jsonify, request, send_from_directory, Response
 from openai import NotFoundError
 from celery.result import AsyncResult
@@ -11,9 +12,11 @@ from app.rag import RAG
 from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction, parse_graph_file
 from app.utils import delete_files
 from flask import request, jsonify, send_from_directory
+from app.file_processor import AudioFileProcessor
 from langchain.vectorstores import FAISS
 from typing import Dict
 from app.graphFiles import GraphFiles
+from app.graph_storage_pg import GraphPostgresStorage
 import asyncio
 import re
 from app.dashboard import Dashboard
@@ -25,10 +28,11 @@ from app.postgres_db import DatabaseManager
 import os
 
 import glob
-
+import tempfile
+import subprocess
+import psycopg2
 
 doc_updates = 0
-
 main = Blueprint('main', __name__)
 
 @main.route("/")
@@ -76,6 +80,34 @@ def cluster_and_classify():
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+@main.route('/transcribe', methods=['POST'])
+def transcribe():
+    current_app.logger.info(f"Audio received. Processing .......")
+    if 'audio' not in request.files:
+        return jsonify({'error': 'No audio file provided'}), 400
+
+    audio_file = request.files['audio']
+
+    # Save the uploaded WebM blob
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as f:
+        audio_file.save(f.name)
+        webm_path = f.name
+
+    wav_path = webm_path.replace(".webm", ".wav")
+
+    # Convert to WAV (Whisper prefers it)
+    subprocess.run(['ffmpeg', '-i', webm_path, wav_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    try:
+        processor = AudioFileProcessor()
+        transcript = processor.extract_text_from_audio(wav_path)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    finally:
+        os.remove(webm_path)
+        os.remove(wav_path)
+    current_app.logger.info(f"Transcript is , {transcript}")
+    return jsonify({'transcript': transcript})
 
 @main.route("/docs/classify", methods=['POST'])
 def classify():
@@ -131,7 +163,7 @@ def query_rag2():
             raise ValueError("Missing data in the request body")
 
         rag = RAG(ChromaDB(),model_source=data['model_name'])
-        res,curated_query,top_reranked_docs = rag.process_user_query_screen2(data['query'], data["access_level"], data["user_role"])
+        res,curated_query,top_reranked_docs = rag.process_user_query_screen2(data['query'], data["access_level"], data["user_role"],  data["lida"])
 
         formatted_data = [
             f"filename: {item['file_name']}, text: {item['text']}" for item in top_reranked_docs
@@ -147,21 +179,43 @@ def query_rag2():
         ]
         screen2EvaluationFunction.delay(combinedList)
 
-        response_json = {"response": res}
+        # Graph -> Remove Python code from the response (if any)
+        pattern = r"```python(.*?)```"
+        clean_response = re.sub(pattern, "", res, flags=re.DOTALL).strip()
 
+        # Voice feature-- Summary in 50 words
+        summary_prompt = (
+        f"Summarize the following answer in less than or equal to 50 words.\n"
+        f"Curated Query: \"{curated_query}\"\n"
+        f"Answer: \"{clean_response}\"")
+
+        summary_resp = rag.model.invoke(summary_prompt)
+        summary_text = summary_resp.content.strip()
+        # voice feature - end
+        
+        response_json = {"response": clean_response}
+        response_json["summary"] = summary_text
+         
+
+        
         if(data["lida"] == True):
             dash = Dashboard()
             path=dash.generate_csv_from_response(response=res, model_source="together")
             openai_api_key = os.getenv("OPENAI_API_KEY")
             chart_link=dash.run_lida_on_csv(path, user_query= curated_query+", represent in "+data["graph_type"] + "chart ", api_key=openai_api_key)
-
+            
             current_app.logger.info(" Lida : image generated")
             response_json["chart"] = "/"+chart_link
-        
-        
+
+        else:
+            dash = Dashboard()
+            path2 = dash.generate_dashboard(response=res)
+            if path2 is not None:
+                response_json["chart"] = "/" + path2
+            else:
+                current_app.logger.warning("⚠️ Graph was requested but no chart was generated.")
+                
         return jsonify(response_json)
-        
-    
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
@@ -243,6 +297,10 @@ def delete_docs():
         for csv_file in glob.glob("cache/csv/*.csv"):
             os.remove(csv_file)
             current_app.logger.info(f"Deleted CSV: {csv_file}")
+
+        for python_code in glob.glob("cache/code/*.py"):
+            os.remove(python_code)
+            current_app.logger.info(f"Deleted Code: {python_code}")
 
         for img_file in glob.glob("cache/images/*.png"):
             os.remove(img_file)
@@ -365,10 +423,7 @@ def rag2EvalResults():
         print(f"Error fetching evaluation results: {e}")
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
 
-
-# data_dir = os.path.join(os.path.dirname(__file__), "data")
-# builder = GraphBuilder(data_dir=data_dir)  # Single instance for data consistency
-# processor = GraphProcessor(builder)
+chunks = None
 @main.route("/graph/process", methods=["POST"])
 def process_graph():
     nest_asyncio.apply()
@@ -383,15 +438,20 @@ def process_graph():
         asyncio.set_event_loop(loop)
         visited= loop.run_until_complete(
             builder.crawl_website(data["url"], int(data.get("depth",1))))
+        global chunks
         chunks = builder.chunk_visited_pages(visited)
-        G_nx = graph.build_similarity_graph(chunks)
-        html_content = graph.render_graph_html(G_nx, min_cluster_size=7,MAX_LABEL_NODES=23)
+        graph_id,G_nx = graph.build_similarity_graph(chunks)
+        html_content = graph.render_graph_html(G_nx, min_cluster_size=6,MAX_LABEL_NODES=15, threshold=0.98)
+        # store_cached_html(key, html_content)
+        # store_graph_data(key, graph)  
+        GraphPostgresStorage(os.getenv("DSN")).store_graph_metadata(graph_id, source_label=data["url"])
         current_app.graph_builder = graph
+        # current_app.graph_cache_key = key
+        # GraphSessionHandler.set(graph, key)
         return Response(html_content, mimetype="text/html")
     except Exception as e:
         current_app.logger.error(f"Processing error: {str(e)}",exc_info=True)
         return jsonify({"error": str(e)}), 500
-
 
 @main.route("/graph/uploaddocs", methods=['POST'])
 def docupload():
@@ -412,23 +472,24 @@ def docupload():
             file.save(file_path)
             saved_files.append(file_path)
             filenames.append(file.filename)
-
+        global chunks
         chunks = []
         for file_path in saved_files:
-            chunk_list =[chunk.text for chunk in parse_graph_file(file_path)] # 👈 Return only chunks
+            filename = os.path.basename(file_path)
+            chunk_list = [f"{filename}||{chunk.text}" for chunk in parse_graph_file(file_path)]  # ⬅️ Add filename inside the chunk with separator
             chunks.extend(chunk_list)
         current_app.logger.info("CHUNKS CREATED :)")
         graph_builder = GraphFiles()
         graph_builder.file_names = filenames
-        G_nx = graph_builder.build_similarity_graph(chunks)
-        html_path = graph_builder.render_graph_html(G_nx, min_cluster_size=3,MAX_LABEL_NODES=15)
+        graph_id,G_nx = graph_builder.build_similarity_graph(chunks)
+        html_path = graph_builder.render_graph_html(G_nx, min_cluster_size=1,MAX_LABEL_NODES=15, threshold=0.84)
+        
+        GraphPostgresStorage(os.getenv("DSN")).store_graph_metadata(graph_id, source_label=", ".join(filenames))
         current_app.graph_builder = graph_builder
-        current_app.logger.error(f"HTML Visualisation Generated", exc_info=True)
         return Response(html_path, mimetype="text/html")
     except Exception as e:
         current_app.logger.error(str(e), exc_info=True)
         return jsonify({"error": str(e)}), 500
-
 
 @main.route("/graph/query", methods=["POST"])
 def graph_query():
@@ -440,26 +501,149 @@ def graph_query():
         if not hasattr(current_app, "graph_builder"):
             return jsonify({"error": "Graph not ready. Please upload documents or scrape website first."}), 400
 
-        builder = current_app.graph_builder
+        if not hasattr(current_app, "graph_builder") or not hasattr(current_app.graph_builder, "all_chunks"):
+                # Fallback: load the latest graph from DB
+                graph_builder = GraphFiles()
+                latest_graph_id = GraphPostgresStorage(os.getenv("DSN")).list_graphs(limit=1)[0]["id"]
+                graph_builder.load_graph_from_db(latest_graph_id)
+                current_app.graph_builder = graph_builder
+        else:
+            graph_builder = current_app.graph_builder
 
-        result = builder.query_graph_link_response(data["query"])
+        result = graph_builder.query_graph_link_response(data["query"])
+
 
         # Extract link and clean text from result
         url_pattern = r"https?://\S+"
-        links = re.findall(url_pattern, result)
-        text_without_links = re.sub(url_pattern, "", result)
+        links = re.findall(url_pattern, result["answer"])
+        text_without_links = re.sub(url_pattern, "", result["answer"])
         clean_response = re.sub(r"\n+", "\n", text_without_links).strip()
 
+        # Check if the source is a file or a link and format accordingly
+        source = result.get("file")
+     
         response_json = {
-            "response": clean_response
+            "response": clean_response,
+            "source": source if source else ""
         }
+
+        if clean_response == "**I don't have enough information.**" or clean_response=="I dont't have enough information.":
+            response_json = {
+                "response": clean_response
+            }
 
         # Include the link if it's present
         if links:
             response_json["link"] = links[0]
-        current_app.logger.info(f"RESPONSE: {response_json}", exc_info=True)
+
         return jsonify(response_json)
 
     except Exception as e:
         current_app.logger.error(f"Graph query error: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+    
+@main.route("/graph/render-clusters-merged", methods=["POST"])
+def render_semantic_cluster_merge():
+    try:
+        data = request.get_json()
+        current_app.logger.info(f"selected clusters list: {data}", exc_info=True)
+        graph = GraphFiles()
+        html = graph.render_combined_clusters_to_single_graph(data)
+
+        current_app.graph_builder = graph  # Crucial for /graph/query to work!
+
+        return Response(html, mimetype="text/html")
+    except Exception as e:
+        current_app.logger.error(f"Error in merged cluster view: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+
+
+def extract_main_label(source_label):
+    if not source_label:
+        return None
+    cleaned = source_label.replace(".pdf", "").strip()
+
+    parts = [part.strip() for part in cleaned.split("-")]
+
+    if len(parts) >= 3:
+        return parts[1]
+    elif len(parts) == 2:
+        return parts[1]
+    else:
+        return parts[0]
+    
+def extract_main_labels_from_multiple(source_labels):
+    if not source_labels:
+        return None
+
+    filenames = [s.strip() for s in source_labels.split(",")]
+    main_labels = [extract_main_label(name) for name in filenames]
+
+    return ", ".join(main_labels)
+
+
+
+@main.route("/graph/graph-cluster-list", methods=["GET"])
+def get_graph_and_clusters():
+    try:
+        storage = GraphPostgresStorage(os.getenv("DSN"))
+        conn = storage.conn
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+            g.id as graph_id,
+            g.source_label,
+            g.created_at,  
+            cl.cluster_id,
+            cl.label as cluster_label,
+            COUNT(gn.id) as node_count
+        FROM graphs g
+        LEFT JOIN cluster_labels cl ON cl.graph_id = g.id
+        LEFT JOIN graph_nodes gn ON gn.graph_id = g.id AND gn.cluster_id = cl.cluster_id
+        GROUP BY g.id, g.source_label, g.created_at, cl.cluster_id, cl.label
+        ORDER BY g.id, cl.cluster_id
+
+        """)
+
+        rows = cur.fetchall()
+
+        graph_map = {}
+        for graph_id, source_label, created_at, cluster_id, cluster_label, node_count in rows:
+            if cluster_id == -1:
+                continue  
+            if graph_id not in graph_map:
+                graph_map[graph_id] = {
+                    "graph_id": graph_id,
+                    "source_label": extract_main_labels_from_multiple(source_label) or f"Graph {graph_id}",
+                    "created_at": created_at.strftime("%B %d, %Y %I:%M %p"),
+                    "clusters": []
+                }
+
+            graph_map[graph_id]["clusters"].append({
+                "cluster_id": cluster_id,
+                "label": cluster_label or f"Cluster {cluster_id}",
+                "node_count": node_count
+            })
+
+        return jsonify(list(graph_map.values()))
+
+    except Exception as e:
+        current_app.logger.error(f"Error listing graph-cluster data: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@main.route("/graph/<int:graph_id>/cluster-labels", methods=["GET"])
+def get_cluster_labels(graph_id):
+    try:
+        conn = psycopg2.connect(os.getenv("DSN"))
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT cluster_id, label FROM cluster_labels WHERE graph_id = %s
+        """, (graph_id,))
+        labels = [{"cluster_id": row[0], "label": row[1]} for row in cur.fetchall()]
+        return jsonify(labels)
+    except Exception as e:
+        current_app.logger.error(f"Error fetching labels: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500

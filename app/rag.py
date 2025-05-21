@@ -5,6 +5,7 @@ from langchain.prompts import PromptTemplate
 from app.models.extracted_file_names import ExtractedFilesModel
 from langchain.output_parsers import PydanticOutputParser
 from flashrank import Ranker, RerankRequest
+import re
 
 
 class RAG:
@@ -18,9 +19,9 @@ class RAG:
         imp_instructions = f'''
         Your task is to optimize the given query for semantic search in a vector database.
 
-    - Correct any misspellings or grammatical errors.
-    - Remove unnecessary details, making the query as straightforward as possible.
-    - Do not output any prefix or suffix; just the rewritten query
+        - Correct any misspellings or grammatical errors.
+        - Remove unnecessary details, making the query as straightforward as possible.
+        - Do not output any prefix or suffix; just the rewritten query
         '''
         response = self.model.invoke(f'''  Query: {query}
         Instructions: {imp_instructions} ''')
@@ -33,22 +34,11 @@ class RAG:
         reranked_docs = ranker.rerank(rerankrequest)
         return reranked_docs
     
-    def generate_prompt(self, user_role, curated_query):
-        # access_instructions = f"""
-
-        # Query: "{curated_query}"
-        
-        # Use the retrieved data to provide a complete, accurate, and helpful response to the given query.
-
-        # - Focus on delivering clear, relevant, and detailed information directly related to the query.  
-        # - If some details are missing, provide the most accurate and informative answer possible based on the available data.  
-        # - Offer guidance or suggest next steps if the provided information may not fully address the query.
-        
-        # """
-        # return access_instructions
-    
-        return f"""
-        You are Solix AI Assistant, an AI assistant designed to help users analyze, interpret, and extract meaningful insights from the given data. Below is a user query along with relevant context retrieved from enterprise data sources via vector search. Use the context to generate a clear and accurate response.
+    def generate_prompt(self, user_role, curated_query, lida):
+      
+        prompt = f"""
+        You are Solix AI Assistant, an AI assistant designed to help users analyze, interpret, and extract meaningful insights from the given data. 
+        Below is a user query along with relevant context retrieved from enterprise data sources via vector search. Use the context to generate a clear and accurate response.
 
         Instructions:
         Focus on delivering clear, relevant, and detailed information directly related to the query.  
@@ -57,6 +47,17 @@ class RAG:
 
         Query: "{curated_query}"
         """
+
+        if not lida:
+            prompt += """
+           - Based on the data, generate visualizations **only if they add value** to the understanding of the data or insights. 
+            - If the response involves **numerical data**, **trends**, **distributions**, or other comparable data that would benefit from a **graphical representation** (such as a chart, graph, or plot), generate the python code using libraries like `matplotlib`, `plotly`, or others.
+            - **Do not** generate pyhon code if the data is more straightforward where a chart or graph would not provide additional insights. 
+            - **Do not** include any extra information like instructions or explanations about how the Python code will generate the chart (e.g., "This code will generate a chart").
+            - Make a **data-driven decision** like an analyst: generate visualizations/python code **only** when they are necessary to convey the most important aspects of the data or insights. For example, do not visualize simple or categorical data unless there is a trend or pattern worth highlighting.
+
+            """
+        return prompt
 
 
     def process_user_query(self, query, access_level):
@@ -103,7 +104,7 @@ class RAG:
         files = self.show_files(response.content)  
         return (response.content, curated_query, files,metadata_only)
     
-    def process_user_query_screen2(self, query, access_level, user_role):
+    def process_user_query_screen2(self, query, access_level, user_role, lida):
     
         curated_query=self.query_rewriting(query)
 
@@ -121,23 +122,22 @@ class RAG:
         reranked_docs = self.rerank_documents(extracted_data, query)
         top_reranked_docs = reranked_docs[:10]
 
-        prompt = self.generate_prompt(user_role, curated_query)
+        prompt = self.generate_prompt(user_role, curated_query,lida = lida)
 
 
         context = f"""
             Data: {top_reranked_docs}
             Instruction: {prompt}
-            Please use the above Data and Instruction to answer the question.
-        """
 
+            Please use the above Data and Instruction to answer the question.
+
+        """
+        
 
         # Invoke the language model with the constructed prompt
         response = self.model.invoke(context)
-        #print(type(top_reranked_docs))
-        #data=pd.DataFrame({"input":curated_query,"output":response.content,"files":[top_reranked_docs]})
-        #data.to_csv("halln.csv")
-        current_app.logger.info(type(response.content))
         
+        # current_app.logger.info(response)       
         return (response.content,curated_query,top_reranked_docs)
 
     
