@@ -57,7 +57,6 @@ class ChromaDB:
             
             self.collection.add(documents= documents, ids= ids, metadatas= metadatas)
             #Postgres DB
-            current_app.logger.info(f"Start time:{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
             for file_id, data in zip(ids, metadatas):                
                 SENSITIVITY_LABELS = {
                     1: "Public Data",
@@ -91,18 +90,15 @@ class ChromaDB:
                                                        'attributes': data["attributes"],
                                                        'created_by': "System",
                                                        'modified_by': "System",
-                                                       }
-                current_app.logger.info(f"File metadata data: {file_metadata_result}")
-                current_app.logger.info(f"File metadata data classification: {file_metadata_classification_result}")
+                                                       }                
 
                 try:
                     db_manager=DatabaseManager()
                     db_manager.add_file_metadata(file_metadata_result)
                     db_manager.add_file_metadata_classification(file_metadata_classification_result)                    
                 except Exception as e:
-                    current_app.logger.error(f"Error in add_file_metadata: {e}")
-            # db_manager.close()
-            current_app.logger.info(f"End time:{datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]}")
+                    current_app.logger.error(f"Error in add_file_metadata: {e}")            
+            
             return True
         except Exception as e:
             print("[add_documents] Exception - " + str(e))
