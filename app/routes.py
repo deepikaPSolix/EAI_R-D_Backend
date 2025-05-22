@@ -192,20 +192,8 @@ def del_vanna_training_data_by_id(id):
 def get_vanna_training_data():
     vn = MyVanna()
     df = vn.get_training_data()
-    current_app.logger.info("Vanna df size: " + str(len(df)))
-    df_dict = df.to_dict()
-    current_app.logger.info("Vanna df_dict size: " + str(len(df_dict['id'])))
-    print("Total rows:", len(df))
-    print("id column length:", len(df['id']))
-    print("id column nulls:", df['id'].isnull().sum())
-    print("df_dict['id'] length:", len(df_dict['id']))
     df_list = df.to_dict(orient='list')
-    current_app.logger.info("Vanna df list: " + str(df_list))
-    print("df_list",df_list)
-
-
-
-    return df_dict, 202
+    return df_list["id"], 202
 
 @main.route('/docs/vanna/id/<id>', methods=["GET"])
 def get_vanna_doc_from_db_id(id):
