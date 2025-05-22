@@ -1837,7 +1837,7 @@ class VannaBase(ABC):
             return self.add_question_sql(question=question, sql=sql)
 
         if ddl:
-            print("Adding ddl:", ddl)
+            print("Adding ddl...")
             return self.add_ddl(ddl)
 
         if plan:

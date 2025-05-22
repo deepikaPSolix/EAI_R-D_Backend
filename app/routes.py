@@ -163,7 +163,7 @@ def train_vanna_ddl():
             res.append(vn.train(ddl=ddl))
             vn.add_document(db_id=res[-1], doc_id=data["file_id"])
 
-        current_app.logger.info(f"✅ Added {str(len(ddl_statements))} DDL to vanna chroma:\n{res}\n")
+        current_app.logger.info(f"✅ Added {str(len(ddl_statements))} DDL to vanna chroma")
         return jsonify({"ids": res}), 202
     except Exception as e:
         current_app.logger.error(str(e))
