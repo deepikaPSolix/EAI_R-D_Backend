@@ -528,9 +528,9 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
         }
         try:
             db.add_cluster(cluster_data)
-            print("Cluster evaluation inserted/updated into PostgreSQL.")
+            current_app.logger.info("Cluster evaluation inserted/updated into PostgreSQL.")
         except Exception as e:
-            print("Error inserting cluster evaluation into PostgreSQL:", e)
+            current_app.logger.info("Error inserting cluster evaluation into PostgreSQL:", e)
 
     # Branch 3: Standard File Evaluation
     else:
@@ -547,9 +547,9 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
         }
         try:
             db.add_file_evaluation(file_evaluation_data)
-            print("File evaluation inserted/updated into PostgreSQL.")
+            current_app.logger.info("File evaluation inserted/updated into PostgreSQL.")
         except Exception as e:
-            print("Error inserting file evaluation into PostgreSQL:", e)
+            current_app.logger.info("Error inserting file evaluation into PostgreSQL:", e)
 
 
 
@@ -712,9 +712,9 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
         }
         try:
             db.add_query_response(query_response_data)
-            print("Screen 2 evaluation record for GPT inserted into PostgreSQL.")
+            current_app.logger.info("Screen 2 evaluation record for GPT inserted into PostgreSQL.")
         except Exception as e:
-            print("Error inserting Screen 2 evaluation record for GPT:", e)
+            current_app.logger.info("Error inserting Screen 2 evaluation record for GPT:", e)
         # -------- End of New Section --------          
 
         return f"Done with Screen 2 Evaluation function! Results saved to {evaluation_result_file}."
