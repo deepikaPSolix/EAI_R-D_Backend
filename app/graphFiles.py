@@ -155,8 +155,22 @@ class GraphFiles():
                     u, v = top_idx[i], top_idx[j]
                     G_nx.add_edge(u, v, weight=float(simm_mat[i,j]))
 
+        current_app.logger.info(f"""
+        "🔍 About to run Leiden on full graph: "
+        "{G_nx.number_of_nodes()} nodes, "
+        "{G_nx.number_of_edges()} edges"
+    """)
         G_ig      = ig.Graph.TupleList(G_nx.edges(), directed=False)
         partition = leidenalg.find_partition(G_ig, leidenalg.ModularityVertexPartition)
+
+        # After clustering, log cluster membership counts
+        from collections import Counter
+        counts = Counter(partition.membership)
+        for cid, cnt in counts.items():
+            current_app.logger.info( f"✅ Leiden produced {len(counts)} clusters: , .join(# {cid}→{cnt}" )  
+        # for idx, com in enumerate(partition.membership):
+        #     G_nx.nodes[top_idx[idx]]['cluster'] = int(com)
+        
         for idx, com in enumerate(partition.membership):
             G_nx.nodes[top_idx[idx]]['cluster'] = int(com)
         current_app.logger.info("✅ Leiden partition done")
@@ -539,7 +553,6 @@ class GraphFiles():
         f"🔗 Available Links (for your reference only):\n" + "\n".join(f"- {link}" for link in unique_links) + "\n\n"
         f"❓ Question:\n{query}\n\n"
         "**Instructions:**\n"
-        "- Write a helpful answer in **Markdown format**.\n"
         "- Do NOT include or mention any hyperlinks, clickable labels, or '🔗' symbols in the response body.\n"
         "- Do NOT include or echo any lines like 'Schedule a Job for Task Group' or 'Lookup Category'.\n"
         "- Do NOT mention file names or PDFs in your answer.\n"
