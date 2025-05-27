@@ -7,13 +7,7 @@ from app.hitl_data_processing import compare_and_update_postgres
 #Postgres
 from app.postgres_db import DatabaseManager
 import os
-DB_CONFIG = {
-    "host": "192.168.1.116",
-    "database": "postgres",
-    "user": "postgres",
-    "password": "12345",
-    "port": "25432"
-}
+
 def parse_retention(rt_str):
     """
     Convert strings like "1 year, 6 months" or "18 months" into a numeric
@@ -58,7 +52,7 @@ def store_in_postgres(data_list):
     cursor = None
 
     try:
-        connection = psycopg2.connect(**DB_CONFIG)
+        connection = psycopg2.connect(os.getenv("DSN_postgres"))
         cursor = connection.cursor()
 
         current_app.logger.info("PostgreSQL data received: %s", data_list)
@@ -68,8 +62,7 @@ def store_in_postgres(data_list):
 
             cursor.execute("SELECT COUNT(*) FROM human_altered_table WHERE file_name = %s;", (file_name,))
             result = cursor.fetchone()[0]
-            print("filenames:", result)
-
+            
             if result > 0:
           
                 cursor.execute("DELETE FROM human_altered_table WHERE file_name = %s;", (file_name,))
@@ -123,9 +116,7 @@ def store_in_postgres(data_list):
         for record in data_list:
             # Clean and coerce retention_time to None if empty or invalid
             raw_rt = record.get('retention_time')
-            current_app.logger.info(f"raw_rt:{raw_rt}")
-            retention_time_val = parse_retention(raw_rt)
-            current_app.logger.info(f"retention_time_val:{retention_time_val}")            
+            retention_time_val = parse_retention(raw_rt)                 
             word_count_val = record.get('word_count')
             if word_count_val in (None, ''):
                 word_count_val = None
@@ -143,14 +134,7 @@ def store_in_postgres(data_list):
                 clean_text(record.get('created_by', 'System')),
                 clean_text(record.get('modified_by', 'System'))
             ))
-            current_app.logger.info(f"Values:{values}")
-            current_app.logger.info(
-                "Parsed retention_time for file %s: %r (type: %s)",
-                record['id'],
-                retention_time_val,
-                type(retention_time_val).__name__
-            )
-       
+                   
         cursor.executemany(insert_query, values)
 
         connection.commit()

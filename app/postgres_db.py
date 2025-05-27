@@ -1,16 +1,10 @@
 from flask import current_app
 import psycopg2
 import json
+import os
 from psycopg2.extras import Json
 
-# Default connection parameters (you can later load these from a config file or environment variables)
-DEFAULT_DB_PARAMS = {
-    "dbname": "postgres",
-    "user": "postgres",
-    "password": "12345",
-    "host": "192.168.1.116",
-    "port": "25432"
-}
+
 
 class DatabaseManager:
     _instance = None
@@ -25,7 +19,7 @@ class DatabaseManager:
         if hasattr(self, "_initialized") and self._initialized:
             return
         try:
-            self.conn = psycopg2.connect(**DEFAULT_DB_PARAMS)
+            self.conn = psycopg2.connect(os.getenv("DSN_postgres"))
             self.conn.autocommit = True
             self.cur = self.conn.cursor()
             self.setup_tables()

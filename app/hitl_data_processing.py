@@ -8,20 +8,12 @@ from flask import current_app
 from app.postgres_db import DatabaseManager
 import os
 
-DB_CONFIG = {
-    "host": "192.168.1.116",
-    "database": "postgres",
-    "user": "postgres",
-    "password": "12345",
-    "port": "25432"
-}
-
 
 def compare_and_update_postgres():
     """ Compares and updates machine-generated data with human-reviewed documents in PostgreSQL. """
 
     try:
-        connection = psycopg2.connect(**DB_CONFIG)
+        connection = psycopg2.connect(os.getenv("DSN_postgres"))
         cursor = connection.cursor()
            
         machine_df = pd.read_sql_query("SELECT * FROM public.file_metadata_classification", connection)
@@ -103,10 +95,10 @@ def compare_and_update_postgres():
         cursor.executemany(update_query, values)
         connection.commit()
 
-        print("[PostgreSQL] Data updated successfully.")
+        current_app.logger.info("[PostgreSQL] Data updated successfully.")
 
     except Exception as e:
-        print(f"[PostgreSQL] Error: {e}")
+        current_app.logger.error(f"[PostgreSQL] Error: {e}")
 
     finally:
         if cursor:

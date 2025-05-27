@@ -498,9 +498,9 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
         }
         try:
             db.add_query_response(query_response_data)
-            print("Query response evaluation inserted into PostgreSQL.")
+            current_app.logger.info("Query response evaluation inserted into PostgreSQL.")
         except Exception as e:
-            print("Error inserting query response evaluation into PostgreSQL:", e)
+            current_app.logger.info("Error inserting query response evaluation into PostgreSQL:", e)
 
     # Branch 2: Cluster Evaluation – use the evaluation result filename to decide if this is a cluster evaluation
     elif evaluation_result_file == "fileClusterResult.json":
