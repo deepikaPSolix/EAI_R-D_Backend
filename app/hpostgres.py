@@ -141,7 +141,6 @@ def store_in_postgres(data_list):
         current_app.logger.info("[PostgreSQL] Data inserted successfully.")
         compare_and_update_postgres()
     except Exception as e:
-        print(f"[PostgreSQL] Error: {e}")
         current_app.logger.error(f"[PostgreSQL] Error: {e}")
         if connection:
             connection.rollback()
