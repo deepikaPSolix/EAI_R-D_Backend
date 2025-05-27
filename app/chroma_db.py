@@ -5,6 +5,11 @@ import json
 from flask import current_app
 from pandas import DataFrame
 
+#Postgres
+from app.postgres_db import DatabaseManager
+import os
+import datetime
+
 class ChromaDB:
 
     _instance = None
@@ -51,6 +56,49 @@ class ChromaDB:
                 )
             
             self.collection.add(documents= documents, ids= ids, metadatas= metadatas)
+            #Postgres DB
+            for file_id, data in zip(ids, metadatas):                
+                SENSITIVITY_LABELS = {
+                    1: "Public Data",
+                    2: "Internal Data",
+                    3: "Confidential Data",
+                    4: "Restricted Data",
+                    5: "Private Data",
+                    6: "Critical Data",
+                    7: "Regulatory Data",
+                }
+
+                file_metadata_result = {    'file_id': file_id,
+                                            'file_name': data["file_name"],
+                                            'file_type':  os.path.splitext(data["file_name"])[1].lstrip('.') ,
+                                            'created_time': data["created_at"],
+                                            'last_modification_time': data["created_at"],
+                                            'created_by': "System",
+                                            'modified_by': "System",
+                                            'file_size': data["file_size"]
+                                            }
+
+                file_metadata_classification_result = {'file_id': file_id,
+                                                       'file_name': data["file_name"],
+                                                       'word_count': data["word_count"],
+                                                       'data_category': data["label"],
+                                                       'sensitivity': SENSITIVITY_LABELS.get(int(data["sensitivity"]), data["sensitivity"]),
+                                                       'data_classifiers': data["data_classifiers"],
+                                                       'responsible_values': data["responsible_values"], 
+                                                       'retention_time': (lambda s: 0 if not s.strip() else float(s.split()[0]) + (float(s.split(',')[1].split()[0]) / 12 if ',' in s else 0))(data["retention_time"]),
+                                                       'word_count' : data["word_count"],
+                                                       'attributes': data["attributes"],
+                                                       'created_by': "System",
+                                                       'modified_by': "System",
+                                                       }                
+
+                try:
+                    db_manager=DatabaseManager()
+                    db_manager.add_file_metadata(file_metadata_result)
+                    db_manager.add_file_metadata_classification(file_metadata_classification_result)                    
+                except Exception as e:
+                    current_app.logger.error(f"Error in add_file_metadata: {e}")            
+            
             return True
         except Exception as e:
             print("[add_documents] Exception - " + str(e))
@@ -155,6 +203,9 @@ class ChromaDB:
             collection_name = self.collection.name
             self.chroma_client.delete_collection(name=collection_name)
             self.collection = self.chroma_client.create_collection(name=collection_name)
+            #Postgres
+            # db_manager=DatabaseManager()
+            # db_manager.delete_all_rows()
         except Exception as e:
             current_app.logger.error(str(e))
             print("[delete_all_docs] Exception - " + str(e))

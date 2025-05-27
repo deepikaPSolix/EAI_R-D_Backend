@@ -16,6 +16,10 @@ from app.ragEvaluationScreenTwo import TextAnalysis
 import app.utils as utils
 from celery.exceptions import MaxRetriesExceededError
 
+#Postgres
+from app.postgres_db import DatabaseManager
+import os
+
 def process_file_workflow(files: list):
     files_group = []
     for f in files:
@@ -334,8 +338,8 @@ def fileSensitivityEvalutionFunction():
 def evaluationFunction(combinedList,include_relevance=True, include_hallucination=True,include_moderation=True,evaluation_result_file="noEvaluationFileProvided.json",evaluation_result_csv="noEvaluationCSVProvided.csv",fileName=None):
     rag_evaluator=ragEval()
 
-    if len(combinedList)==4:
-        curated_query, response, top_reranked_docs,originalQuery = combinedList
+    if len(combinedList)==6:
+        curated_query, response, top_reranked_docs,originalQuery, model_name, access_level = combinedList
     else:
         curated_query, response, top_reranked_docs = combinedList
 
@@ -440,7 +444,7 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
     if fileName is not None:
         evaluation_data['file_name'] = fileName
 
-    if len(combinedList) == 4:
+    if len(combinedList) == 6:
         evaluation_data['original_query'] = originalQuery
 
 
@@ -449,9 +453,156 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
 
     # Save the updated list back to the file
     with open("./cache/"+evaluation_result_file, 'w') as file:
-        json.dump(data, file, indent=4)
+        json.dump(data, file, indent=4)   
+
+    db = DatabaseManager()  
+
+    current_app.logger.info("evaluation_result_file: %s", evaluation_result_file)
+
+    # Branch 1: Query Evaluation
+    if 'original_query' in evaluation_data:
+        role=" "     
+        access_level=int(access_level)
+        if access_level == 5:
+            role = "Administrator"
+        elif access_level == 6:
+            role = "Data Governance Officers"
+        elif access_level == 7:
+            role = "Compliance and Legal Teams"
+        else:
+            role = " "
+        MODEL_LABELS = {
+            "llama4":      "Meta Llama 4",
+            "together":    "Meta Llama 3",
+            "openai":      "GPT-4o",
+            "qwen":        "Qwen 2.5",
+            "ollama":      "Llama3 70B local",
+            "qwen_local":  "Qwen 2.5 local",
+            "llama3b":     "Llama 3B local",
+            "llama8b":     "Llama 8B local"
+            }
+        model_name_raw = model_name.lower()
+        model_label = MODEL_LABELS.get(model_name_raw, model_name)
+        query_response_data = {
+            "query": evaluation_data.get("original_query"),
+            "response": evaluation_data.get("inital_llm_response"),
+            "chatbot": "Solix Governance Assistant",
+            "model_for_response_generation": model_label,
+            "evaluation_method": "LLM_as_Judge-Opik",  
+            "hallucination": evaluation_scores.get("hallucination", {}).get("score"),
+            "hallucination_reason": evaluation_scores.get("hallucination", {}).get("reason"),
+            "relevance": evaluation_scores.get("answer_relevance", {}).get("score"),
+            "relevance_reason": evaluation_scores.get("answer_relevance", {}).get("reason"),
+            "created_by": role,
+            "modified_by": role
+        }
+        try:
+            db.add_query_response(query_response_data)
+            current_app.logger.info("Query response evaluation inserted into PostgreSQL.")
+        except Exception as e:
+            current_app.logger.info("Error inserting query response evaluation into PostgreSQL:", e)
+
+    # Branch 2: Cluster Evaluation – use the evaluation result filename to decide if this is a cluster evaluation
+    elif evaluation_result_file == "fileClusterResult.json":
+        current_app.logger.info("→ Entering CLUSTER branch")
+        # Here, we expect that combinedList[1] is a list containing one dictionary with the key "attributes"
+        if isinstance(combinedList[1], list) and len(combinedList[1]) > 0 and isinstance(combinedList[1][0], dict):
+            attributes_data = combinedList[1][0].get("attributes", [])
+        else:
+            attributes_data = []
+        if attributes_data and isinstance(attributes_data, list):
+            data_category = attributes_data[0].get("label")  # Assume cluster label is consistent for the group
+            file_list = [attr.get("file_name") for attr in attributes_data if attr.get("file_name")]
+            num_files = len(file_list)
+        else:
+            data_category = None
+            file_list = []
+            num_files = 0
+
+        cluster_data = {
+            "data_category": data_category,
+            "num_files": num_files,
+            "file_list": file_list,
+            "relevance": evaluation_scores.get("answer_relevance", {}).get("score", 0.0),
+            "hallucination": evaluation_scores.get("hallucination", {}).get("score", 0.0)
+        }
+        try:
+            db.add_cluster(cluster_data)
+            current_app.logger.info("Cluster evaluation inserted/updated into PostgreSQL.")
+        except Exception as e:
+            current_app.logger.info("Error inserting cluster evaluation into PostgreSQL:", e)
+
+    # Branch 3: Standard File Evaluation
+    else:
+        current_app.logger.info("→ Entering FILE branch")
+        file_name_value = evaluation_data.get("file_name")
+        if file_name_value:
+            file_name_value = file_name_value.strip()
+        file_evaluation_data = {
+            "file_name": file_name_value,
+            "hallucination": evaluation_scores.get("hallucination", {}).get("score"),
+            "relevance": evaluation_scores.get("answer_relevance", {}).get("score"),
+            "created_by": "system",
+            "modified_by": "system"
+        }
+        try:
+            db.add_file_evaluation(file_evaluation_data)
+            current_app.logger.info("File evaluation inserted/updated into PostgreSQL.")
+        except Exception as e:
+            current_app.logger.info("Error inserting file evaluation into PostgreSQL:", e)
+
+
+
+
+    
+    # *******************************************************   
+    
 
     return f"Done with Eval function!!{evaluation_result_file}!!!!"
+
+def make_reasons(relevance_score: float, hallucination_score: float):
+    # Relevance Reason
+    if relevance_score is None:
+        relevance_reason = "Relevance could not be calculated."
+    elif relevance_score >= 75:
+        relevance_reason = (
+            f"The response is highly relevant (score: {relevance_score:.1f}%), "
+            "closely matching the user’s query intent."
+        )
+    elif relevance_score >= 40:
+        relevance_reason = (
+            f"The response appears to address the query, but the similarity score is moderate "
+            f"(score: {relevance_score:.1f}%). This may be due to the embedding‐based measure "
+            "underestimating semantic alignment."
+        )
+    else:
+        relevance_reason = (
+            f"The similarity score is low (score: {relevance_score:.1f}%), "
+            "even though the content looks correct. Low cosine‐similarity can occur when wording "
+            "differs substantially from the context embeddings."
+        )
+
+    # Hallucination Reason
+    if hallucination_score is None:
+        hallucination_reason = "Hallucination could not be calculated."
+    elif hallucination_score <= 10:
+        hallucination_reason = (
+            f"Minimal hallucination detected (score: {hallucination_score:.1f}%). "
+            "Almost all content is grounded in the context."
+        )
+    elif hallucination_score <= 30:
+        hallucination_reason = (
+            f"Moderate hallucination detected (score: {hallucination_score:.1f}%). "
+            "Some tokens were not found in the context—this may be due to paraphrasing or synonyms."
+        )
+    else:
+        hallucination_reason = (
+              f"High hallucination detected (score: {hallucination_score:.1f}%). "
+            "The response introduces creative or novel information beyond the context, which can provide fresh insights but should be verified."
+        )
+
+    return relevance_reason, hallucination_reason
+
 
 @shared_task
 def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluationScreen2Result.json"):
@@ -459,9 +610,10 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
     This function evaluates the relevance and hallucination scores for a given response
     and context list and saves the results in a JSON file.
     """
+    if len(combinedList)==5:
+        response,context_list,originalQuery, model_name, user_role=combinedList
 
-
-    if len(combinedList)==3:
+    elif len(combinedList)==3:
         response,context_list,originalQuery=combinedList
     else:
         response,context_list=combinedList
@@ -502,7 +654,7 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
             'evaluation_scores': evaluation_scores
         }
 
-        if len(combinedList) == 3:
+        if len(combinedList) in (3, 4):
             evaluation_data['original_query'] = originalQuery
 
        
@@ -513,6 +665,57 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
         # Save the updated list back to the file
         with open("./cache/" + evaluation_result_file, 'w') as file:
             json.dump(data, file, indent=4)
+
+        db = DatabaseManager()
+
+       
+        MODEL_LABELS = {
+            "llama4":      "Meta Llama 4",
+            "together":    "Meta Llama 3",
+            "openai":      "GPT-4o",
+            "qwen":        "Qwen 2.5",
+            "ollama":      "Llama3 70B local",
+            "qwen_local":  "Qwen 2.5 local",
+            "llama3b":     "Llama 3B local",
+            "llama8b":     "Llama 8B local",
+            }
+        model_name_raw = model_name.lower()
+        model_label = MODEL_LABELS.get(model_name_raw, model_name)
+
+        USER_ROLE_LABELS = {
+            "patient": "User 1",
+            "nurse":   "User 2",
+            "doctor":  "User 3",
+        }
+
+        mapped_role = USER_ROLE_LABELS.get(user_role.lower(), user_role)
+
+        # First, pull out your numeric scoresF
+        rel_score = evaluation_scores.get("relevance_score")
+        hall_score = evaluation_scores.get("hallucination_score")
+
+        # Now call your helper:
+        relevance_reason, hallucination_reason = make_reasons(rel_score, hall_score)
+
+        query_response_data = {
+            "query": originalQuery, 
+            "response": response,
+            "chatbot": "Solix Governance GPT",
+            "model_for_response_generation": model_label,
+            "evaluation_method":"Cosine Similarity",
+            "hallucination": evaluation_scores.get("hallucination_score"),
+            "hallucination_reason": hallucination_reason, 
+            "relevance": evaluation_scores.get("relevance_score"),
+            "relevance_reason": relevance_reason,
+            "created_by": mapped_role,
+            "modified_by": mapped_role
+        }
+        try:
+            db.add_query_response(query_response_data)
+            current_app.logger.info("Screen 2 evaluation record for GPT inserted into PostgreSQL.")
+        except Exception as e:
+            current_app.logger.info("Error inserting Screen 2 evaluation record for GPT:", e)
+        # -------- End of New Section --------          
 
         return f"Done with Screen 2 Evaluation function! Results saved to {evaluation_result_file}."
 
