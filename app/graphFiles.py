@@ -166,8 +166,8 @@ class GraphFiles():
         # After clustering, log cluster membership counts
         from collections import Counter
         counts = Counter(partition.membership)
-        for cid, cnt in counts.items():
-            current_app.logger.info( f"✅ Leiden produced {len(counts)} clusters: , .join(# {cid}→{cnt}" )  
+        # for cid, cnt in counts.items():
+        #     current_app.logger.info( f"✅ Leiden produced {len(counts)} clusters: , .join(# {cid}→{cnt}" )  
         # for idx, com in enumerate(partition.membership):
         #     G_nx.nodes[top_idx[idx]]['cluster'] = int(com)
         
