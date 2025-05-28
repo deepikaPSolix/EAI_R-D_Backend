@@ -1,4 +1,3 @@
-
 from flask import current_app
 import networkx as nx
 import igraph as ig
@@ -7,15 +6,24 @@ import leidenalg
 import os
 import psycopg2
 from app.graph_storage_pg import GraphPostgresStorage
+from app.storage_redis import GraphRedisStorage
 from random import sample
 from app.llm_model import LLMModel
 from flask import current_app
 from sklearn.metrics.pairwise import cosine_similarity
 from sentence_transformers import SentenceTransformer
 import numpy as np
+import re
+import ast
+from collections import Counter
 from urllib.parse import urlparse
 from pyvis.network import Network
-
+dns_host = os.getenv("DNS_HOST")
+dns_dbname = os.getenv("DNS_DBNAME")
+dns_user = os.getenv("DNS_USER")
+dns_password = os.getenv("DNS_PASSWORD")
+dns_port = os.getenv("DNS_PORT")
+dns = f"host={dns_host} dbname={dns_dbname} user={dns_user} password={dns_password} port={dns_port}"
 class GraphFiles():
     def __init__(self):
         self.st_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -23,94 +31,190 @@ class GraphFiles():
         self.all_chunks=None
         self.all_embeddings = None
    
-    def build_similarity_graph(self, chunks, threshold=0.87, max_chunks_for_graph=1500):
+    def _ensure_all_chunks_are_dicts(self):
+        """
+        Normalize self.all_chunks to a list of dicts with 'text' and 'source'.
+        Converts malformed strings, stringified dicts, and fills in missing keys.
+        """
+        valid_chunks = []
+        for idx, chunk in enumerate(self.all_chunks):
+            try:
+                if isinstance(chunk, dict) and "text" in chunk and "source" in chunk:
+                    valid_chunks.append(chunk)
+                elif isinstance(chunk, dict):
+                    valid_chunks.append({
+                        "text": chunk.get("text", ""),
+                        "source": chunk.get("source", "No Source Available")
+                    })
+                elif isinstance(chunk, str):
+                    try:
+                        parsed = ast.literal_eval(chunk)
+                        if isinstance(parsed, dict):
+                            valid_chunks.append({
+                                "text": parsed.get("text", ""),
+                                "source": parsed.get("source", "No Source Available")
+                            })
+                        else:
+                            valid_chunks.append({
+                                "text": str(chunk),
+                                "source": "No Source Available"
+                            })
+                    except Exception:
+                        valid_chunks.append({
+                            "text": str(chunk),
+                            "source": "No Source Available"
+                        })
+                else:
+                    valid_chunks.append({
+                        "text": str(chunk),
+                        "source": "No Source Available"
+                    })
+            except Exception as e:
+                current_app.logger.error(f"⚠️ Failed to normalize chunk at index {idx}: {repr(chunk)} - {e}")
+                valid_chunks.append({
+                    "text": str(chunk),
+                    "source": "No Source Available"
+                })
+
+        self.all_chunks = valid_chunks
+
+
+    def split_source_and_text(self, raw: str):
+        """Split 'source||text' and clean both parts, also remove embedded filename lines."""
+        raw = raw.replace("\x00", "").strip()
+        source = None
+        text = raw
+
+        if "||" in raw:
+            source, text = raw.split("||", 1)
+            source = source.strip()
+            text = text.strip()
+
+        if source:
+            filename = os.path.splitext(os.path.basename(source))[0].lower()
+            cleaned_lines = []
+            for line in text.splitlines():
+                line_lower = line.strip().lower()
+                if filename in line_lower:
+                    continue  
+                if all(part in line_lower for part in filename.split()):
+                    continue  
+                cleaned_lines.append(line.strip())
+            text = "\n".join(cleaned_lines)
+
+        return source, text.strip()
+
+
+    def build_similarity_graph(self,
+                               chunks,
+                               threshold: float = 0.85,
+                               max_chunks_for_graph: int = 1500):
         current_app.logger.info(f"CHUNKS received: {len(chunks)}")
-        def clean_str(value):
-            return str(value).replace("\x00", "") if isinstance(value, str) else value
-        # Step 1: Process all chunks
-        all_texts = []
-        processed_texts = []
-        G_nx = nx.Graph()
+        
+        G_nx = nx.Graph(); processed_texts = []
         for idx, chunk in enumerate(chunks):
             try:
+                source = None
+                text = ""
+
                 if isinstance(chunk, str):
                     try:
                         parsed = ast.literal_eval(chunk)
                         if isinstance(parsed, dict):
-                            text = clean_str(parsed.get("text", "").strip())
-                            url = clean_str(parsed.get("url"))
-                            section_title = clean_str(parsed.get("section_title")) or "Untitled"
-                            G_nx.add_node(idx, text=parsed, url=url, section_title=section_title)
-                            processed_texts.append(text)
+                            text = parsed.get("text", "").strip()
+                            source = parsed.get("url", "").strip()
                         else:
-                            clean_text = clean_str(chunk.strip())
-                            G_nx.add_node(idx, text=clean_text)
-                            processed_texts.append(clean_text)
+                            source, text = self.split_source_and_text(chunk)
                     except Exception:
-                        clean_text = clean_str(chunk.strip())
-                        G_nx.add_node(idx, text=clean_text)
-                        processed_texts.append(clean_text)
+                        source, text = self.split_source_and_text(chunk)
+
                 elif isinstance(chunk, dict):
-                    text = clean_str(chunk.get("text", "").strip())
-                    url = clean_str(chunk.get("url"))
-                    section_title = clean_str(chunk.get("section_title")) or "Untitled"
-                    G_nx.add_node(idx, text=chunk, url=url, section_title=section_title)
-                    processed_texts.append(text)
+                    text = chunk.get("text", "").strip()
+                    source = chunk.get("url", "").strip()
+
                 else:
-                    clean_text = clean_str(str(chunk))
-                    G_nx.add_node(idx, text=clean_text)
-                    processed_texts.append(clean_text)
+                    source, text = self.split_source_and_text(str(chunk))
+
             except Exception as e:
-                current_app.logger.warning(f"⚠️ Failed to add node at index {idx}: {e}")
-                clean_text = clean_str(str(chunk))
-                G_nx.add_node(idx, text=clean_text)
-                processed_texts.append(clean_text)
+                current_app.logger.warning(f"⚠️ Failed to process chunk {idx}: {e}")
+                source, text = self.split_source_and_text(str(chunk))
+
+            G_nx.add_node(idx, text=text.strip(), source=source)
+            processed_texts.append(text.strip())
 
         current_app.logger.info(f"NODES added to full graph: {G_nx.number_of_nodes()}")
 
-        # Step 2: Store everything for LLM / semantic query (full dataset)
-        self.all_chunks = chunks
-        self.all_embeddings = self.st_model.encode(processed_texts)
+        self.all_chunks = [{"text": G_nx.nodes[n].get("text", ""), "source": G_nx.nodes[n].get("source", "No Source Available")} for n in G_nx.nodes()]
+        self._ensure_all_chunks_are_dicts() 
+        self.all_embeddings = self.st_model.encode([c["text"] for c in self.all_chunks])
 
-        # Step 3: Select top-K chunks for GRAPHING only
-        mean_vec = np.mean(self.all_embeddings, axis=0).reshape(1, -1)
-        similarities = cosine_similarity(self.all_embeddings, mean_vec).flatten()
-        top_k_indices = np.argsort(similarities)[-max_chunks_for_graph:]
+        mean_vec = np.mean(self.all_embeddings, axis=0, keepdims=True)
+        sims     = cosine_similarity(mean_vec, self.all_embeddings).flatten()
+        top_idx  = np.argsort(sims)[-max_chunks_for_graph:]
+        emb_trim = self.all_embeddings[top_idx]
 
-        # Step 4: Create a trimmed graph
-        graph_nodes = {i for i in top_k_indices}
-        G_trimmed = G_nx.subgraph(graph_nodes).copy()
-        texts_for_graph = [G_nx.nodes[i]['text'] for i in top_k_indices]
-        embeddings_for_graph = [self.all_embeddings[i] for i in top_k_indices]
+        simm_mat = cosine_similarity(emb_trim)
+        for i in range(len(emb_trim)):
+            for j in range(i+1, len(emb_trim)):
+                if simm_mat[i,j] >= threshold:
+                    u, v = top_idx[i], top_idx[j]
+                    G_nx.add_edge(u, v, weight=float(simm_mat[i,j]))
 
-        current_app.logger.info(f"Trimmed graph node count: {G_trimmed.number_of_nodes()}")
-
-        # Step 5: Compute similarity + clustering
-        sim_matrix = cosine_similarity(embeddings_for_graph)
-        for i in range(len(texts_for_graph)):
-            for j in range(i + 1, len(texts_for_graph)):
-                if sim_matrix[i][j] > threshold:
-                    idx_i = top_k_indices[i]
-                    idx_j = top_k_indices[j]
-                    G_trimmed.add_edge(idx_i, idx_j, weight=sim_matrix[i][j])
-
-        G_ig = ig.Graph.TupleList(G_trimmed.edges(), directed=False)
+        current_app.logger.info(f"""
+        "🔍 About to run Leiden on full graph: "
+        "{G_nx.number_of_nodes()} nodes, "
+        "{G_nx.number_of_edges()} edges"
+    """)
+        G_ig      = ig.Graph.TupleList(G_nx.edges(), directed=False)
         partition = leidenalg.find_partition(G_ig, leidenalg.ModularityVertexPartition)
+
+        # After clustering, log cluster membership counts
+        from collections import Counter
+        counts = Counter(partition.membership)
+        # for cid, cnt in counts.items():
+        #     current_app.logger.info( f"✅ Leiden produced {len(counts)} clusters: , .join(# {cid}→{cnt}" )  
+        # for idx, com in enumerate(partition.membership):
+        #     G_nx.nodes[top_idx[idx]]['cluster'] = int(com)
+        
+        for idx, com in enumerate(partition.membership):
+            G_nx.nodes[top_idx[idx]]['cluster'] = int(com)
         current_app.logger.info("✅ Leiden partition done")
 
-        for idx, community in enumerate(partition.membership):
-            G_trimmed.nodes[top_k_indices[idx]]['cluster'] = community
+        pg = GraphPostgresStorage(dns=dns)
+        self.graph_id = pg.save_graph(G_nx)
+        current_app.logger.info(f"Saved graph {self.graph_id} to Postgres")
 
-        # Step 6: Store final trimmed graph + embeddings for viz
-        self.G_nx = G_trimmed
-        self.graph_id = GraphPostgresStorage(dsn=os.getenv("DSN")).save_graph(G_trimmed)
-        self.chunk_node_ids = list(G_trimmed.nodes())
-        self.chunks = [G_trimmed.nodes[n]["text"] for n in self.chunk_node_ids]
-        self.embeddings = self.st_model.encode(self.chunks)
+        redis_store = GraphRedisStorage()
+        redis_store.store_graph(G_nx)
+        current_app.logger.info("Saved graph to RedisGraph")
 
-        return self.graph_id, G_trimmed
+        self.G_nx           = G_nx
+        self.chunk_node_ids = list(G_nx.nodes())
+        self.chunks         = [G_nx.nodes[n]["text"] for n in self.chunk_node_ids]
+        self.embeddings     = self.st_model.encode(self.chunks)
 
-    
+        return self.graph_id, G_nx
+
+
+    def _redisgraph_expand(self, seed_ids, max_depth=2, limit=20):
+        if seed_ids is None or len(seed_ids) == 0:
+            return []
+
+        store     = GraphRedisStorage()
+        graph     = store.graph
+        seed_list = ",".join(str(i) for i in seed_ids)
+        q = f"""
+        MATCH (c:Chunk)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
+        WHERE c.idx IN [{seed_list}]
+        RETURN DISTINCT x.idx, x.text, x.source
+        LIMIT {limit}
+        """
+        result = graph.query(q)
+        return [
+            {"idx": int(r[0]), "text": r[1], "source": r[2]}
+            for r in result.result_set
+        ]
+
     def get_main_node_label_from_url(self, url):
         netloc = urlparse(url).netloc
         if netloc.startswith("www."):
@@ -125,16 +229,14 @@ class GraphFiles():
         else:
             return f"{len(filenames)} Uploaded Files"
     def render_graph_html(self, G_nx, min_cluster_size, MAX_LABEL_NODES, threshold):
-
-
         clusters = defaultdict(list)
         for node, data in G_nx.nodes(data=True):
             cluster = data.get("cluster", -1)
             clusters[cluster].append(node)
 
-        current_app.logger.info(f"All clusters: {[(c, len(n)) for c, n in clusters.items()]}")
+        # current_app.logger.info(f"All clusters: {[(c, len(n)) for c, n in clusters.items()]}")
         sorted_clusters = sorted(clusters.items(), key=lambda x: len(x[1]), reverse=True)
-        current_app.logger.info(f"📊 Cluster sizes: {[(c, len(n)) for c, n in sorted_clusters]}")
+        # current_app.logger.info(f"📊 Cluster sizes: {[(c, len(n)) for c, n in sorted_clusters]}")
 
         MAX_CLUSTERS = 8
         filtered_clusters = {
@@ -174,7 +276,7 @@ class GraphFiles():
 
         for cluster_id, nodes in clusters.items():
             if cluster_id == -1:
-                continue  # optional: skip labeling unknown clusters
+                continue  
             cluster_text = "\n".join([get_clean_text(G_nx,node) for node in nodes])
             label = self.generate_cluster_label(cluster_text, cluster_id)
             all_labels[cluster_id] = label
@@ -194,7 +296,6 @@ class GraphFiles():
 
         self.add_all_semantic_edges(G_nx, G_radial, threshold)
 
-        # ✅ Sanitize node IDs before passing to Pyvis
         G_cleaned = nx.Graph()
         for n, d in G_radial.nodes(data=True):
             safe_n = str(n) if not isinstance(n, (int, str)) else n
@@ -209,11 +310,8 @@ class GraphFiles():
         net.from_nx(G_cleaned)
         net.repulsion(node_distance=150, central_gravity=0.3)
 
-        current_app.logger.info(f"✅ Render complete. Cluster labels: {list(all_labels.values())}")
+        # current_app.logger.info(f"✅ Render complete. Cluster labels: {list(all_labels.values())}")
         return net.generate_html()
-
-    
-
 
     def add_all_semantic_edges(self, source_graph: nx.Graph, target_graph: nx.Graph, threshold):
         """
@@ -232,29 +330,27 @@ class GraphFiles():
                         edge_count += 1
         current_app.logger.info(f"🌐 Global semantic edges added: {edge_count}")
     def render_combined_clusters_to_single_graph(self, graph_cluster_map: dict, min_cluster_size=1, MAX_LABEL_NODES=7, threshold=0.84):
-    
-
             combined_G = nx.Graph()
             node_id_map = {}
             cluster_labels = {}
 
-            conn = psycopg2.connect(os.getenv("DSN"))
+            conn = psycopg2.connect(dns)
             cur = conn.cursor()
 
             for graph_id, cluster_ids in graph_cluster_map.items():
                 cluster_ids = [int(cid) for cid in cluster_ids if int(cid) >= 0]
 
                 cur.execute("""
-                    SELECT gn.node_idx, gn.cluster_id, gn.text, gn.file_name, cl.label
+                    SELECT gn.node_idx, gn.cluster_id, gn.text, gn.source, cl.label
                     FROM graph_nodes gn
                     LEFT JOIN cluster_labels cl ON cl.graph_id = gn.graph_id AND cl.cluster_id = gn.cluster_id
                     WHERE gn.graph_id = %s AND gn.cluster_id = ANY(%s)
                 """, (graph_id, cluster_ids))
                 rows = cur.fetchall()
 
-                for node_idx, cluster_id, text, file_name, label in rows:
+                for node_idx, cluster_id, text, source, label in rows:
                     new_id = f"{graph_id}_{node_idx}"
-                    combined_G.add_node(new_id, text=text, cluster=cluster_id, graph_id=graph_id, file_name=file_name)
+                    combined_G.add_node(new_id, text=text, cluster=cluster_id, graph_id=graph_id, source=source)
                     node_id_map[(graph_id, node_idx)] = new_id
                     cluster_labels[(graph_id, cluster_id)] = label or f"Cluster {cluster_id}"
 
@@ -279,8 +375,19 @@ class GraphFiles():
             self.G_nx = combined_G
             self.graph_id = None
             self.chunk_node_ids = list(combined_G.nodes())
-            self.all_chunks = [combined_G.nodes[n]["text"] for n in self.chunk_node_ids]
-            self.all_embeddings = self.st_model.encode(self.all_chunks)
+            self.all_chunks = [
+                    {
+                        "text": combined_G.nodes[n].get("text", ""),
+                        "source": combined_G.nodes[n].get("source", "No Source Available")
+                    }
+                    for n in self.chunk_node_ids
+                ]
+
+            self._ensure_all_chunks_are_dicts()
+
+            self.all_embeddings = self.st_model.encode([
+                chunk["text"] for chunk in self.all_chunks if chunk["text"]
+            ])
 
             net = Network(height="800px", width="100%", directed=False)
             main_node = "Main"
@@ -328,12 +435,8 @@ class GraphFiles():
             net.repulsion(node_distance=150, central_gravity=0.3)
             return net.generate_html()
 
-
-
-
-
     def generate_cluster_label(self, cluster_text: str, cluster_id: int) -> str:
-        conn = psycopg2.connect(os.getenv("DSN"))
+        conn = psycopg2.connect(dns)
         cur = conn.cursor()
 
         try:
@@ -359,19 +462,17 @@ class GraphFiles():
                 current_app.logger.warning(f"⚠️ Cluster {cluster_id} is empty. Using default label.")
             else:
                 prompt = f"""
-You are an expert language model tasked with labeling semantic clusters in a knowledge graph.
-🧠 Cluster #{cluster_id} Content:
-{cluster_text.strip()}
-🆕 Existing Label:{existing_labels}
-Each cluster is a group of related topics or concepts. Your goal is to generate a **clear, concise, and completely Unique Label** (2–3 words max) that best summarizes the main idea of the cluster **without duplicating or imitating any existing labels**.
-📌 Existing labels in this graph which are given below:
-{chr(10).join(f"- {label}" for label in sorted(existing_labels)) or 'None'}
-❗ VERY IMPORTANT:
-- DO NOT use the same words, synonyms, or vague rephrasings of Existing Label.
-- If the cluster is similar to an Unique Label, analyze the **difference** and reflect that distinction in the new label.
-- The label must stand out conceptually from all others — it should not be ambiguous or generic.
-- Only return the label. Do not include explanations, punctuation, or extra text.
-    """.strip()
+                        You are an expert language model tasked with labeling semantic clusters in a knowledge graph.
+                        🧠 Cluster #{cluster_id} Content:
+                        {cluster_text.strip()}
+                        🆕 Existing Label:{existing_labels}
+                        Each cluster is a group of related topics or concepts. Your goal is to generate a **clear, concise, and completely Unique Label** (2–3 words max) that best summarizes the main idea of the cluster **without duplicating or imitating any existing labels**.
+                        📌 Existing labels in this graph which are given below:
+                        {chr(10).join(f"- {label}" for label in sorted(existing_labels)) or 'None'}
+                        ❗ VERY IMPORTANT:
+                        - DO NOT use the same words, synonyms, or vague rephrasings of Existing Label.
+                        - Only return the label. Do not include explanations, punctuation, or extra text.
+                            """.strip()
 
                 response = self.llm.model.invoke(prompt).content.strip()
                 candidate = response or f"Cluster {cluster_id}"
@@ -400,113 +501,176 @@ Each cluster is a group of related topics or concepts. Your goal is to generate 
 
         return label
 
+  
     def query_graph_link_response(self, query: str) -> dict:
-        """Query using top chunks to return LLM-generated response + related link"""
-        query_vec = self.st_model.encode([query])[0]
-        if not hasattr(self, 'all_chunks') or self.all_chunks is None:
-            raise ValueError("❌ all_chunks not initialized. Please call build_similarity_graph first.")
-        if self.all_embeddings is None:
-            self.all_embeddings = self.st_model.encode([chunk['text'] for chunk in self.all_chunks if chunk.get('text')])
+        current_app.logger.info(f"📝 Received query: {query!r}")
 
-        similarities = cosine_similarity([query_vec], self.all_embeddings)[0]
+        q_emb = self.st_model.encode([query])[0]
 
+        if not self.all_chunks or self.all_embeddings is None:
+            return {"answer": "I don’t have enough information.", "link": None, "file": None}
 
-        top_k = max(5, int(len(self.all_chunks) * 0.01))
-        top_k_idx = np.argsort(similarities)[-top_k:][::-1]
+        self._ensure_all_chunks_are_dicts()
 
-        retrieved_units = []
-        for i in top_k_idx:
-            chunk = self.all_chunks[i]
-            if isinstance(chunk, str) and "||" in chunk:
-                filename, text = chunk.split("||", 1)
-                retrieved_units.append({
-                    "unit_id": i,
-                    "text": text.strip(),
-                    "url": "No Link Available",
-                   
-                    "file_name": filename.strip()
-                })
-            elif isinstance(chunk, dict):
-                url = chunk.get("url") or "No Link Available" 
-                retrieved_units.append({
-                    "unit_id": i,
-                    "text": chunk.get("text", ""),
-                    "url": url,
-                
-                    "file_name": chunk.get("file_name")
-                })
+        sims = cosine_similarity([q_emb], self.all_embeddings).flatten()
+        k = max(5, int(len(self.all_chunks) * 0.01))
+        seeds = sims.argsort()[-k:][::-1].tolist()
+
+        expanded = self._redisgraph_expand(seeds, max_depth=2, limit=20)
+        combined_idxs = list(seeds)
+        for e in expanded:
+            if e["idx"] not in combined_idxs:
+                combined_idxs.append(e["idx"])
+
+        expanded_map = {e["idx"]: e for e in expanded}
+        u_list = []
+        for idx in combined_idxs:
+            if idx in expanded_map:
+                u = expanded_map[idx]
             else:
-                current_app.logger.warning(f"Unexpected chunk format at index {i}: {chunk}")
+                cu = self.all_chunks[idx]
+                u = {
+                    "text": cu.get("text", ""),
+                    "source": cu.get("source", "")
+                }
+            u_list.append(u)
 
+        texts = [u["text"] for u in u_list]
+        embs2 = self.st_model.encode(texts)
+        sims2 = cosine_similarity([q_emb], embs2).flatten()
+        top5 = np.argsort(sims2)[-5:][::-1]
 
-        product_links = [unit["url"] for unit in retrieved_units]
-        valid_links = [url for url in product_links if url != "No Link Available"]
+        units = []
+        link_candidates = []
+        for pos in top5:
+            u = u_list[pos]
+            src = u.get("source", "")
+            if src and isinstance(src, str) and "http" in src:
+                link_candidates.append(src)
+            units.append(f"**Source:** {src}\n{u['text']}")
 
-        retrieved_texts = "\n---\n".join([
-            f"[retrieved text: {unit['text']}" for unit in retrieved_units
-        ])
-        current_app.logger.info(f"len_chunks{len(retrieved_texts)}")
+        context = "\n---\n".join(units)
+        unique_links = list(dict.fromkeys(link_candidates)) 
 
-        prompt = self._format_prompt(query, valid_links, retrieved_texts)
+        prompt = (
+        "You are a helpful assistant. Respond to the user's question using only the context below.\n\n"
+        f"📘 Context:\n{context}\n\n"
+        f"🔗 Available Links (for your reference only):\n" + "\n".join(f"- {link}" for link in unique_links) + "\n\n"
+        f"❓ Question:\n{query}\n\n"
+        "**Instructions:**\n"
+        "- Do NOT include or mention any hyperlinks, clickable labels, or '🔗' symbols in the response body.\n"
+        "- Do NOT include or echo any lines like 'Schedule a Job for Task Group' or 'Lookup Category'.\n"
+        "- Do NOT mention file names or PDFs in your answer.\n"
+        "- At the end of your response, include only **one** relevant link (from the list above) on its own line. Nothing else.\n"
+        "- If no relevant link exists, skip the link completely.\n"
+        "- If there is not enough information to answer the question from the context, respond exactly with:\n"
+        "  [NO_ANSWER]"
+    )
+        try:
+            raw_response = self.llm.model.invoke(prompt)
+            out = str(raw_response.content).strip()
+        except Exception as e:
+            current_app.logger.error(f"❌ LLM call failed: {str(e)}")
+            return {"answer": "There was an error while generating the response.", "link": None, "file": None}
 
+        current_app.logger.info(f"✅ LLM response: {out}")
 
-        llm_response = self.llm.model.invoke(prompt).content.strip()
+        used_link = None
+        if isinstance(out, str):
+            for link in unique_links:
+                if link in out:
+                    used_link = link
+                    break
 
-        file_name = next((unit.get("file_name") for unit in retrieved_units if unit.get("file_name")), None)
-        current_app.logger.info(f"FILENAME:{file_name}")
+        clean_response = out.replace(used_link, "").strip() if used_link else out
+
+        if "[NO_ANSWER]" in clean_response:
+            return {
+                "answer": "I don’t have enough information.",
+                "link": None,
+                "sources": None
+            }
+
+        file_used = used_link or (u_list[top5[0]].get("source") if len(top5) > 0 else None)
+
         return {
-            "answer": llm_response,
-            "file": file_name 
+            "answer": clean_response,
+            "link": used_link,
+            "sources": file_used
         }
-       
-    def _format_prompt(self, query, product_links, retrieved_texts):
-        max_input_length = 6000
-        trimmed_texts = retrieved_texts[:max_input_length]
-#  f"Available Links:\n" + "\n".join(product_links) + "\n\n"
-        return (
-    f"""You are a helpful assistant. Answer the user’s question **directly** and **in Markdown**, without prefacing “the context shows…” or echoing back the question. 
-— If you do have enough information in the provided context, just give the answer (with steps or bullets as needed).  
-— If you don’t, respon"d exactly:  
-    I don’t have enough information.
-Use:
-- Numbered lists for steps
-- Bold for headings
-- Line breaks between paragraphs"""
-    f"context:\n{retrieved_texts}\n\n"
-   
-    f"User Question:\n{query}\n\n"
-    f"Instructions:\n"
-    "- Read the context carefully.\n"
-    "- If the context includes a real link relevant to your answer, include **only one link** on a new line at the end.\n"
-    "- Do **NOT** include fake links like 'No Link Available' or placeholder text.\n"
-    "- If no link is available or needed, **just skip it** — only return the answer.\n"
-    "- If there's no relevant info in the context, return exactly: 'I don't have enough information.' **Do not return any links or sources in this case.**\n"  # Modified this line
-    "- Stick strictly to the context provided. Don't make things up.\n"
-    "- When providing step-by-step instructions, format them using numbered Markdown list syntax.\n"
-    "- Format:\n"
-    "  [Answer]\n"
-    "  [Link / source — only if real, available, and useful]\n"
-)
+  
+
     def load_graph_from_db(self, graph_id: int):
-        storage = GraphPostgresStorage(dsn=os.getenv("DSN"))
+        storage = GraphPostgresStorage(dns=dns)
         G_nx = storage.load_graph(graph_id)
 
-        # Store graph info for query
         self.graph_id = graph_id
         self.G_nx = G_nx
         self.chunk_node_ids = list(G_nx.nodes())
         self.chunks = [G_nx.nodes[n].get("text", "") for n in self.chunk_node_ids]
 
-        # --- NEW: Build all_chunks with url from the node attributes ---
-        self.all_chunks = [
-            {
-                "text":   G_nx.nodes[n].get("text", ""),
-                "file_name": G_nx.nodes[n].get("file_name"," "),
-                "url":    G_nx.nodes[n].get("url", "No Link Available")
-            }
-            for n in self.chunk_node_ids
-        ]
+        self.all_chunks = []
+        for n in self.chunk_node_ids:
+            text = G_nx.nodes[n].get("text", "")
+            source = G_nx.nodes[n].get("source")
+
+            if source and isinstance(source, str):
+                filename = os.path.splitext(os.path.basename(source))[0].strip()
+                if filename:
+                    text_lines = [
+                        line for line in text.splitlines()
+                        if filename.lower() not in line.lower()
+                    ]
+                    text = "\n".join(text_lines).strip()
+
+            if not source or str(source).strip().lower() in {"", "none", "null"}:
+                source = getattr(self, "source_url", "No Source Available")
+
+            self.all_chunks.append({
+                "text": text,
+                "source":source})
 
         self.all_embeddings = self.st_model.encode(
             [chunk["text"] for chunk in self.all_chunks if chunk["text"]]
         )
+        self._ensure_all_chunks_are_dicts()
+
+
+    def load_graph_from_redis(self):
+        """Load the entire semantic_graph from RedisGraph into memory."""
+        store = GraphRedisStorage()
+        graph = store.graph
+
+        q_nodes = "MATCH (n:Chunk) RETURN n.idx, n.text, n.url, n.file_name, n.cluster"
+        result  = graph.query(q_nodes)
+        G_nx    = nx.Graph()
+
+        for idx, text, url, fn, cluster in result.result_set:
+            idx = int(idx)
+            G_nx.add_node(
+                idx,
+                text    = text,
+                url     = url or "",
+                file_name = fn or "",
+                cluster = int(cluster)
+            )
+
+        q_edges = "MATCH (a:Chunk)-[r:SIMILAR]->(b:Chunk) RETURN a.idx, b.idx, r.weight"
+        result  = graph.query(q_edges)
+        for u, v, w in result.result_set:
+            G_nx.add_edge(int(u), int(v), weight=float(w))
+
+        self.G_nx           = G_nx
+        self.chunk_node_ids = list(G_nx.nodes())
+        self.all_chunks     = [
+            {
+              "text":      G_nx.nodes[n]["text"],
+              "url":       G_nx.nodes[n]["url"],
+              "file_name": G_nx.nodes[n]["file_name"]
+            }
+            for n in self.chunk_node_ids
+        ]
+        texts = [c["text"] for c in self.all_chunks]
+        self.all_embeddings = self.st_model.encode(texts)
+
+        current_app.logger.info(f"🔄 Loaded graph from Redis: {len(self.all_chunks)} nodes, {G_nx.number_of_edges()} edges")

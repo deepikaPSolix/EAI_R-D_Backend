@@ -1,133 +1,88 @@
+# app/graphbuilder.py
+import os
 import asyncio
-import aiohttp
-import random
-from flask import current_app
+import logging
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright
-from urllib.parse import urlparse, urljoin
-from typing import Dict, List, Tuple
+from urllib.parse import urljoin
 from unstructured.partition.text import partition_text
 from unstructured.chunking.title import chunk_by_title
-from app.canon import canonicalize_url, is_internal_link
-import logging
-import json
-import os
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+from crawl4ai.async_dispatcher import SemaphoreDispatcher
+from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
+from crawl4ai.content_scraping_strategy import LXMLWebScrapingStrategy
+from playwright.async_api import async_playwright
 
 logger = logging.getLogger(__name__)
 
 class GraphBuilder:
-    def __init__(self):
-        self.visited = {}
-        self.edges = []
-    async def _scrape_website(self, url: str, base_url: str):
-        url = url.strip()
-        if url in self.visited:
-            return []
+    def __init__(self, concurrency: int = 10):
+        self.visited = {}  
+        self.edges   = []
+        self.concurrency = concurrency
 
-        try:
-            headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-            async with self.session.get(url, headers=headers, timeout=10) as response:
-                if response.status != 200:
-                    return []
-                raw_bytes = await response.read()
-                text_content = raw_bytes.decode('utf-8', errors='ignore')
-                soup = BeautifulSoup(text_content, "html.parser")
-                extracted_text = soup.get_text(separator="\n", strip=True)
-                raw_links = [a['href'] for a in soup.find_all("a", href=True)]
-                links = list(dict.fromkeys([canonicalize_url(urljoin(url, link)) for link in raw_links]))
-                internal_links = [link for link in links if is_internal_link(base_url, link)]
-                self.visited[url] = extracted_text
-                return internal_links
-        except Exception as e:
-            logger.warning(f"aiohttp failed: {e}")
-            return await self._playwright_fallback(url, base_url)
-
-    async def _playwright_fallback(self, url: str, base_url: str):
-        url = url.strip()
-        try:
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                context = await browser.new_context(ignore_https_errors=True)
-                page = await context.new_page()
-                await page.goto(url, timeout=20000)
-                content = await page.content()
-                soup = BeautifulSoup(content, "html.parser")
-                extracted_text = soup.get_text(separator="\n", strip=True)
-                raw_links = [a['href'] for a in soup.find_all("a", href=True)]
-                links = list(dict.fromkeys([canonicalize_url(urljoin(url, link)) for link in raw_links]))
-                internal_links = [link for link in links if is_internal_link(base_url, link)]
-                self.visited[url] = extracted_text
-                logger.info(f"✅ Playwright fallback success for {url}")
-                await browser.close()
-                return internal_links
-        except Exception as e:
-            logger.error(f"❌ Playwright failed for {url}: {str(e)}")
-            return []
-
-
-    
     async def crawl_website(self, start_url: str, max_depth: int = 1):
-        self.visited = {}
-        self.edges = []
-        connector = aiohttp.TCPConnector(ssl=False)
-        self.session = aiohttp.ClientSession(connector=connector)
-        start_url = start_url.strip()
-        to_crawl = [(start_url, 0)]
-        logger.info('Crawling the webpages...')
-        while to_crawl:
-            current_url, depth = to_crawl.pop(0)
-            if int(depth) > max_depth:
+        concurrency: int = 20
+        strategy = BFSDeepCrawlStrategy(
+        max_depth=max_depth,            
+        include_external=False          
+    )
+
+        run_cfg = CrawlerRunConfig(
+            deep_crawl_strategy=strategy,
+            scraping_strategy=LXMLWebScrapingStrategy(),
+            stream=False,
+            semaphore_count=concurrency     
+        )
+
+        dispatcher = SemaphoreDispatcher(concurrency)
+
+        async with AsyncWebCrawler() as crawler:
+            results = await crawler.arun(
+                url=start_url,
+                config=run_cfg,
+                dispatcher=dispatcher
+            )
+
+        output = []
+        for result in results:
+            if not result.success:
                 continue
-                
-            links = await self._scrape_website(current_url, start_url)
-            
-            for link in links:
-                self.edges.append((current_url, link))
-                if link not in self.visited and link not in [u for u, d in to_crawl]:
-                    to_crawl.append((link, depth + 1))
-                
-            await asyncio.sleep(random.uniform(0.5, 1.5))
-        logger.info('Crawling Done...')
-        await self.session.close()
-        return self.visited
+            html = result.cleaned_html or result.html
+            text = BeautifulSoup(html, "html.parser") \
+                .get_text(separator=" ", strip=True)
+            output.append({"url": result.url, "text": text})
 
+        return output
     def chunk_text(self, text: str) -> list[dict]:
-
-
         elements = partition_text(text=text)
-        total_chars = sum(len(el.text or '') for el in elements)
-        
-        # Dynamically adjust chunk size
-        if total_chars <= 50_000:
-            max_chunk_chars = 600
-        elif total_chars <= 200_000:
-            max_chunk_chars = 1000
+        total    = sum(len(el.text or "") for el in elements)
+
+        if total <= 50_000:
+            max_chars = 600
+        elif total <= 200_000:
+            max_chars = 1000
         else:
-            max_chunk_chars = 1500
+            max_chars = 1500
 
         chunks = chunk_by_title(
             elements,
             multipage_sections=True,
             combine_text_under_n_chars=50,
-            new_after_n_chars=max_chunk_chars,
+            new_after_n_chars=max_chars
         )
-
-        clean_chunks = [
-            {"text": chunk.text.strip()}
-            for chunk in chunks
-            if chunk.text and len(chunk.text.strip()) > 50  
+        return [
+            {"text": c.text.strip(), "url": ""} 
+            for c in chunks
+            if c.text and len(c.text.strip()) > 50
         ]
 
-        return clean_chunks
-
-
-    def chunk_visited_pages(self, visited_pages: dict) -> list[dict]:
+    def chunk_visited_pages(self, visited_pages: list[dict]) -> list[dict]:
         all_chunks = []
-
-        for url, content in visited_pages.items():
-            chunks = self.chunk_text(content)
-            for chunk in chunks:
-                chunk["url"] = url
-                all_chunks.append(chunk)
-
-        return all_chunks 
+        for page in visited_pages:
+            url, text = page["url"], page["text"]
+            for c in self.chunk_text(text):
+                c["url"] = url
+                all_chunks.append(c)
+            # 2) if you had anchors, add them here …
+        # logger.info(f"Generated total {len(all_chunks)} chunks")
+        return all_chunks

@@ -133,7 +133,7 @@ services:
               capabilities: [gpu]
 
   redis:
-    image: "redis"
+    image: "redislabs/redisgraph:latest"
     container_name: dev-redis
     ports:
       - "6379:6379"

@@ -14,6 +14,7 @@ pillow
 celery
 chromadb==0.6.3
 redis
+redisgraph
 flashrank
 torch
 torchvision
@@ -47,4 +48,6 @@ lida
 lida[infographics]
 hf_xet
 psycopg2-binary
+crawl4ai
+lxml
 

@@ -4,7 +4,12 @@ import json
 import os
 from psycopg2.extras import Json
 
-
+dns_host = os.getenv("DNS_HOST")
+dns_dbname = os.getenv("DNS_DBNAME")
+dns_user = os.getenv("DNS_USER")
+dns_password = os.getenv("DNS_PASSWORD")
+dns_port = os.getenv("DNS_PORT")
+dns = f"host={dns_host} dbname={dns_dbname} user={dns_user} password={dns_password} port={dns_port}"
 
 class DatabaseManager:
     _instance = None
@@ -19,7 +24,7 @@ class DatabaseManager:
         if hasattr(self, "_initialized") and self._initialized:
             return
         try:
-            self.conn = psycopg2.connect(os.getenv("DSN_postgres"))
+            self.conn = psycopg2.connect(dns)
             self.conn.autocommit = True
             self.cur = self.conn.cursor()
             self.setup_tables()
