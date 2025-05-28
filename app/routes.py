@@ -34,6 +34,12 @@ import psycopg2
 
 doc_updates = 0
 main = Blueprint('main', __name__)
+dns_host = os.getenv("DNS_HOST")
+dns_dbname = os.getenv("DNS_DBNAME")
+dns_user = os.getenv("DNS_USER")
+dns_password = os.getenv("DNS_PASSWORD")
+dns_port = os.getenv("DNS_PORT")
+dns = f"host={dns_host} dbname={dns_dbname} user={dns_user} password={dns_password} port={dns_port}"
 
 @main.route("/")
 def home():
@@ -445,7 +451,7 @@ def process_graph():
         html_content = graph.render_graph_html(G_nx, min_cluster_size=6,MAX_LABEL_NODES=15, threshold=0.80)
         # store_cached_html(key, html_content)
         # store_graph_data(key, graph)  
-        GraphPostgresStorage(os.getenv("DSN")).store_graph_metadata(graph_id, source_label=data["url"])
+        GraphPostgresStorage(dns).store_graph_metadata(graph_id, source_label=data["url"])
         current_app.graph_builder = graph
         # current_app.graph_cache_key = key
         # GraphSessionHandler.set(graph, key)
@@ -485,7 +491,7 @@ def docupload():
         graph_id,G_nx = graph_builder.build_similarity_graph(chunks)
         html_path = graph_builder.render_graph_html(G_nx, min_cluster_size=1,MAX_LABEL_NODES=15, threshold=0.70)
         
-        GraphPostgresStorage(os.getenv("DSN")).store_graph_metadata(graph_id, source_label=", ".join(filenames))
+        GraphPostgresStorage(dns).store_graph_metadata(graph_id, source_label=", ".join(filenames))
         current_app.graph_builder = graph_builder
         return Response(html_path, mimetype="text/html")
     except Exception as e:
@@ -593,7 +599,7 @@ def extract_main_labels_from_multiple(source_labels):
 @main.route("/graph/graph-cluster-list", methods=["GET"])
 def get_graph_and_clusters():
     try:
-        storage = GraphPostgresStorage(os.getenv("DSN"))
+        storage = GraphPostgresStorage(dns)
         conn = storage.conn
         cur = conn.cursor()
 
@@ -642,7 +648,7 @@ def get_graph_and_clusters():
 @main.route("/graph/<int:graph_id>/cluster-labels", methods=["GET"])
 def get_cluster_labels(graph_id):
     try:
-        conn = psycopg2.connect(os.getenv("DSN"))
+        conn = psycopg2.connect(dns)
         cur = conn.cursor()
         cur.execute("""
             SELECT cluster_id, label FROM cluster_labels WHERE graph_id = %s

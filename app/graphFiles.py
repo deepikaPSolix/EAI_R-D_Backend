@@ -18,7 +18,12 @@ import ast
 from collections import Counter
 from urllib.parse import urlparse
 from pyvis.network import Network
-
+dns_host = os.getenv("DNS_HOST")
+dns_dbname = os.getenv("DNS_DBNAME")
+dns_user = os.getenv("DNS_USER")
+dns_password = os.getenv("DNS_PASSWORD")
+dns_port = os.getenv("DNS_PORT")
+dns = f"host={dns_host} dbname={dns_dbname} user={dns_user} password={dns_password} port={dns_port}"
 class GraphFiles():
     def __init__(self):
         self.st_model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -175,7 +180,7 @@ class GraphFiles():
             G_nx.nodes[top_idx[idx]]['cluster'] = int(com)
         current_app.logger.info("✅ Leiden partition done")
 
-        pg = GraphPostgresStorage(dsn=os.getenv("DSN"))
+        pg = GraphPostgresStorage(dns=dns)
         self.graph_id = pg.save_graph(G_nx)
         current_app.logger.info(f"Saved graph {self.graph_id} to Postgres")
 
@@ -329,7 +334,7 @@ class GraphFiles():
             node_id_map = {}
             cluster_labels = {}
 
-            conn = psycopg2.connect(os.getenv("DSN"))
+            conn = psycopg2.connect(dns)
             cur = conn.cursor()
 
             for graph_id, cluster_ids in graph_cluster_map.items():
@@ -431,7 +436,7 @@ class GraphFiles():
             return net.generate_html()
 
     def generate_cluster_label(self, cluster_text: str, cluster_id: int) -> str:
-        conn = psycopg2.connect(os.getenv("DSN"))
+        conn = psycopg2.connect(dns)
         cur = conn.cursor()
 
         try:
@@ -596,7 +601,7 @@ class GraphFiles():
   
 
     def load_graph_from_db(self, graph_id: int):
-        storage = GraphPostgresStorage(dsn=os.getenv("DSN"))
+        storage = GraphPostgresStorage(dns=dns)
         G_nx = storage.load_graph(graph_id)
 
         self.graph_id = graph_id

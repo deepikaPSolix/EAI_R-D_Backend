@@ -4,8 +4,8 @@ from datetime import datetime
 import networkx as nx
 
 class GraphPostgresStorage:
-    def __init__(self, dsn):
-        self.conn = psycopg2.connect(dsn)
+    def __init__(self, dns):
+        self.conn = psycopg2.connect(dns)
         self._ensure_tables_exist()
 
     def _ensure_tables_exist(self):

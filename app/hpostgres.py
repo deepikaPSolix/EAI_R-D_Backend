@@ -7,7 +7,12 @@ from app.hitl_data_processing import compare_and_update_postgres
 #Postgres
 from app.postgres_db import DatabaseManager
 import os
-
+dns_host = os.getenv("DNS_HOST")
+dns_dbname = os.getenv("DNS_DBNAME")
+dns_user = os.getenv("DNS_USER")
+dns_password = os.getenv("DNS_PASSWORD")
+dns_port = os.getenv("DNS_PORT")
+dns = f"host={dns_host} dbname={dns_dbname} user={dns_user} password={dns_password} port={dns_port}"
 def parse_retention(rt_str):
     """
     Convert strings like "1 year, 6 months" or "18 months" into a numeric
@@ -52,7 +57,7 @@ def store_in_postgres(data_list):
     cursor = None
 
     try:
-        connection = psycopg2.connect(os.getenv("DSN_postgres"))
+        connection = psycopg2.connect(dns)
         cursor = connection.cursor()
 
         current_app.logger.info("PostgreSQL data received: %s", data_list)
