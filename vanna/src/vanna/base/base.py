@@ -615,14 +615,15 @@ class VannaBase(ABC):
         )
 
         initial_prompt += (
-            "===Response Guidelines \n"
+             "===Response Guidelines \n"
             "1. If the provided context is sufficient, please generate a valid SQL query without any explanations for the question. \n"
             "2. If the provided context is almost sufficient but requires knowledge of a specific string in a particular column, please generate an intermediate SQL query to find the distinct strings in that column. Prepend the query with a comment saying intermediate_sql \n"
             "3. If the provided context is insufficient, based on your knowlwdge choose the columns that makes more sense closely related to columns that tou have asked for. \n"
             "4. Please use the most relevant table(s). \n"
             "5. If the question has been asked and answered before, please repeat the answer exactly as it was given before. \n"
-            "6. If yoy do not see any primary and foreign key relationships(joins) in the DDL, Take the same column names as joins and gemerate the sql queries. \n"
+            "6. If you do not see any primary and foreign key relationships(joins) in the DDL, Take the same column names as joins and gemerate the sql queries. \n"
             f"7. Ensure that the output SQL is {self.dialect}-compliant and executable, and free of syntax errors. \n"
+            "8. For any string comparison in a WHERE clause, wrap both the column and the literal in LOWER() (or UPPER()) to make the match case-insensitive. \n"
         )
 
         message_log = [self.system_message(initial_prompt)]
