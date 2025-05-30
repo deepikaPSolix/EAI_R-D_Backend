@@ -217,7 +217,7 @@ def get_vanna_training_data():
     return df_list["id"], 202
 
 @main.route('/docs/vanna/names', methods=["GET"])
-def get_vanna_training_data():
+def get_vanna_training_data_names():
     vn = MyVanna()
     names = vn.list_document_names()
     return list(names), 202
