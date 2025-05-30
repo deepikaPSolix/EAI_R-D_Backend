@@ -1,7 +1,7 @@
 import json
 import os
 
-from flask import Blueprint, current_app, jsonify, request, send_from_directory, Response
+from flask import Blueprint, current_app, jsonify, request, send_from_directory, url_for, Response
 from openai import NotFoundError
 from celery.result import AsyncResult
 from app.chroma_db import ChromaDB
@@ -21,14 +21,27 @@ import asyncio
 import re
 from app.dashboard import Dashboard
 import nest_asyncio
+
+from app.hpostgres import store_in_postgres
+
+from app.postgres_db import DatabaseManager
+import os
+
 import glob
 import tempfile
 import subprocess
 import psycopg2
 from docx import Document
 from app.vanna_class import MyVanna
+
 doc_updates = 0
 main = Blueprint('main', __name__)
+dns_host = os.getenv("DNS_HOST")
+dns_dbname = os.getenv("DNS_DBNAME")
+dns_user = os.getenv("DNS_USER")
+dns_password = os.getenv("DNS_PASSWORD")
+dns_port = os.getenv("DNS_PORT")
+dns = f"host={dns_host} dbname={dns_dbname} user={dns_user} password={dns_password} port={dns_port}"
 
 @main.route("/")
 def home():
@@ -264,7 +277,7 @@ def query_rag():
 
         res = rag.process_user_query(data['query'], data["access_level"])
        
-        combinedList=[res[1],res[0],res[3],data["query"]]
+        combinedList=[res[1],res[0],res[3],data["query"], data['model_name'], data['access_level']]
         evaluationFunction.delay(combinedList,include_relevance=True,include_hallucination=True,include_moderation=False,evaluation_result_file="queryEvaluationScreen1Results.json",evaluation_result_csv="queryEvaluationScreen1Results.csv")
         
 
@@ -292,7 +305,9 @@ def query_rag2():
         combinedList = [ 
             str(res),            
             formatted_data,
-            data["query"]    
+            data["query"],
+            data['model_name'],
+             data["user_role"]  
         ]
         screen2EvaluationFunction.delay(combinedList)
 
@@ -388,6 +403,7 @@ def update_docs():
         # Check if data is not None (i.e., the JSON body was valid)
         if data is None:
             raise ValueError("Missing data in the request body")
+        store_in_postgres(data)
         db = ChromaDB()
         res = db.update_documents(data)
         doc_updates += 1
@@ -404,6 +420,8 @@ def delete_docs():
     global doc_updates
     try:
         ChromaDB().delete_all_docs()
+        db_manager=DatabaseManager()
+        # db_manager.delete_all_rows()
         FILES_TO_CLEAR=["queryEvaluationScreen1Results.json","queryEvaluationScreen2Result.json", "sensitivityEvaluation.json", "fileAttributesResult.json","fileClusterResult.json"]
         file_paths = [os.path.join(current_app.config['BASE_DIR'], file_name) for file_name in FILES_TO_CLEAR]
         delete_files(file_paths)
@@ -554,11 +572,12 @@ def process_graph():
             builder.crawl_website(data["url"], int(data.get("depth",1))))
         global chunks
         chunks = builder.chunk_visited_pages(visited)
+        current_app.logger.info(f"CHUNKS from Webpages : {chunks[0]}")
         graph_id,G_nx = graph.build_similarity_graph(chunks)
-        html_content = graph.render_graph_html(G_nx, min_cluster_size=6,MAX_LABEL_NODES=15, threshold=0.98)
+        html_content = graph.render_graph_html(G_nx, min_cluster_size=6,MAX_LABEL_NODES=15, threshold=0.80)
         # store_cached_html(key, html_content)
         # store_graph_data(key, graph)  
-        GraphPostgresStorage(os.getenv("DSN")).store_graph_metadata(graph_id, source_label=data["url"])
+        GraphPostgresStorage(dns).store_graph_metadata(graph_id, source_label=data["url"])
         current_app.graph_builder = graph
         # current_app.graph_cache_key = key
         # GraphSessionHandler.set(graph, key)
@@ -577,7 +596,6 @@ def docupload():
         current_app.logger.info("FILES ARE BEING PROCESSED..... Hold UP!")
         saved_files = []
         filenames = []
-        # Save uploaded files
         for file in files:
             if file.filename == '':
                 return jsonify({"error": "Empty filename"}), 400
@@ -590,15 +608,16 @@ def docupload():
         chunks = []
         for file_path in saved_files:
             filename = os.path.basename(file_path)
-            chunk_list = [f"{filename}||{chunk.text}" for chunk in parse_graph_file(file_path)]  # ⬅️ Add filename inside the chunk with separator
+            chunk_list = [f"{filename}||{chunk.text}" for chunk in parse_graph_file(file_path)]  
             chunks.extend(chunk_list)
         current_app.logger.info("CHUNKS CREATED :)")
+        # current_app.logger.info(f"CHUNKS from FileUploads : {chunks[0]}")
         graph_builder = GraphFiles()
         graph_builder.file_names = filenames
         graph_id,G_nx = graph_builder.build_similarity_graph(chunks)
-        html_path = graph_builder.render_graph_html(G_nx, min_cluster_size=1,MAX_LABEL_NODES=15, threshold=0.84)
+        html_path = graph_builder.render_graph_html(G_nx, min_cluster_size=1,MAX_LABEL_NODES=15, threshold=0.70)
         
-        GraphPostgresStorage(os.getenv("DSN")).store_graph_metadata(graph_id, source_label=", ".join(filenames))
+        GraphPostgresStorage(dns).store_graph_metadata(graph_id, source_label=", ".join(filenames))
         current_app.graph_builder = graph_builder
         return Response(html_path, mimetype="text/html")
     except Exception as e:
@@ -613,50 +632,57 @@ def graph_query():
             return jsonify({"error": "Query parameter required"}), 400
 
         if not hasattr(current_app, "graph_builder"):
-            return jsonify({"error": "Graph not ready. Please upload documents or scrape website first."}), 400
+            return jsonify({"error": "Graph not ready. Please upload first."}), 400
 
-        if not hasattr(current_app, "graph_builder") or not hasattr(current_app.graph_builder, "all_chunks"):
-                # Fallback: load the latest graph from DB
-                graph_builder = GraphFiles()
-                latest_graph_id = GraphPostgresStorage(os.getenv("DSN")).list_graphs(limit=1)[0]["id"]
-                graph_builder.load_graph_from_db(latest_graph_id)
-                current_app.graph_builder = graph_builder
-        else:
-            graph_builder = current_app.graph_builder
+        graph_builder = current_app.graph_builder
+        if not hasattr(graph_builder, "all_chunks"):
+      # fallback: load *from RedisGraph* if in‐memory chunks aren't set
+            graph_builder.load_graph_from_redis()
+            current_app.graph_builder = graph_builder
 
         result = graph_builder.query_graph_link_response(data["query"])
-
-
-        # Extract link and clean text from result
+        res = (result.get('answer') or '').strip()
+        source = (result.get('sources') or '').strip()
         url_pattern = r"https?://\S+"
-        links = re.findall(url_pattern, result["answer"])
-        text_without_links = re.sub(url_pattern, "", result["answer"])
-        clean_response = re.sub(r"\n+", "\n", text_without_links).strip()
-
-        # Check if the source is a file or a link and format accordingly
-        source = result.get("file")
-     
-        response_json = {
-            "response": clean_response,
-            "source": source if source else ""
-        }
-
-        if clean_response == "**I don't have enough information.**" or clean_response=="I dont't have enough information.":
+        links = re.findall(url_pattern, source)
+        clean_text = re.sub(url_pattern, "", result["answer"]).strip()
+        
+        response_json = {"response": clean_text}
+        if res.lower() == "i don't have enough information.":
             response_json = {
-                "response": clean_response
+                "response": clean_text
             }
-
-        # Include the link if it's present
+       
+        # current_app.logger.info(f"✅ Graph Query Result: {response_json}")
+        filename = result.get("sources","")
         if links:
             response_json["link"] = links[0]
+        else:
+            filename = result.get("sources", "")
+            if filename:
+                try:
+                    file_url = url_for('main.download_graph_file', filename=filename, _external=True)
+                    response_json["sources"] = [{"name": filename, "url": file_url}]
+                except Exception as e:
+                    current_app.logger.warning(f"⚠️ Skipped building file URL due to: {e}")
 
         return jsonify(response_json)
 
     except Exception as e:
-        current_app.logger.error(f"Graph query error: {str(e)}", exc_info=True)
+        current_app.logger.error(f"Graph query error: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-    
+@main.route('/graph/download/<path:filename>')
+def download_graph_file(filename):
+    """
+    Serve any file from GRAPH_DOC_UPLOAD inline (PDFs open in browser).
+    """
+    return send_from_directory(
+        current_app.config['GRAPH_DOC_UPLOAD'],
+        filename,
+        as_attachment=False
+    )
+
 @main.route("/graph/render-clusters-merged", methods=["POST"])
 def render_semantic_cluster_merge():
     try:
@@ -665,14 +691,12 @@ def render_semantic_cluster_merge():
         graph = GraphFiles()
         html = graph.render_combined_clusters_to_single_graph(data)
 
-        current_app.graph_builder = graph  # Crucial for /graph/query to work!
+        current_app.graph_builder = graph  
 
         return Response(html, mimetype="text/html")
     except Exception as e:
         current_app.logger.error(f"Error in merged cluster view: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
-
-
 
 def extract_main_label(source_label):
     if not source_label:
@@ -698,11 +722,10 @@ def extract_main_labels_from_multiple(source_labels):
     return ", ".join(main_labels)
 
 
-
 @main.route("/graph/graph-cluster-list", methods=["GET"])
 def get_graph_and_clusters():
     try:
-        storage = GraphPostgresStorage(os.getenv("DSN"))
+        storage = GraphPostgresStorage(dns)
         conn = storage.conn
         cur = conn.cursor()
 
@@ -751,7 +774,7 @@ def get_graph_and_clusters():
 @main.route("/graph/<int:graph_id>/cluster-labels", methods=["GET"])
 def get_cluster_labels(graph_id):
     try:
-        conn = psycopg2.connect(os.getenv("DSN"))
+        conn = psycopg2.connect(dns)
         cur = conn.cursor()
         cur.execute("""
             SELECT cluster_id, label FROM cluster_labels WHERE graph_id = %s

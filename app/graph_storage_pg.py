@@ -4,8 +4,8 @@ from datetime import datetime
 import networkx as nx
 
 class GraphPostgresStorage:
-    def __init__(self, dsn):
-        self.conn = psycopg2.connect(dsn)
+    def __init__(self, dns):
+        self.conn = psycopg2.connect(dns)
         self._ensure_tables_exist()
 
     def _ensure_tables_exist(self):
@@ -25,8 +25,7 @@ class GraphPostgresStorage:
                         graph_id INTEGER REFERENCES graphs(id) ON DELETE CASCADE,
                         cluster_id INTEGER,
                         node_idx INTEGER,
-                        file_name TEXT,
-                        url TEXT,
+                        source TEXT,
                         text TEXT
                     );
                 """)
@@ -61,7 +60,6 @@ class GraphPostgresStorage:
 
         with self.conn:
             with self.conn.cursor() as cur:
-                # Insert graph metadata
                 cur.execute("""
                     INSERT INTO graphs (source_label, created_at)
                     VALUES (%s, %s)
@@ -73,48 +71,31 @@ class GraphPostgresStorage:
                 for idx, data in G_nx.nodes(data=True):
                     raw_text = data.get("text", "")
                     cluster_id = int(data.get("cluster", -1))
-                    file_name = clean(data.get("file_name"))
+                    source=clean(data.get('source'))
 
-                    # 🔄 Fallback: Extract file_name if embedded in text
-                    if not file_name and isinstance(raw_text, dict):
-                        embedded_text = clean(raw_text.get("text", ""))
-                        if "||" in embedded_text:
-                            file_name_candidate, _ = embedded_text.split("||", 1)
-                            file_name = clean(file_name_candidate.strip())
-                    elif not file_name and isinstance(raw_text, str):
-                        if "||" in raw_text:
-                            file_name_candidate, _ = raw_text.split("||", 1)
-                            file_name = clean(file_name_candidate.strip())
-
-                    # Clean and assign text and url
                     if isinstance(raw_text, dict):
                         text = clean(raw_text.get("text", ""))
-                        url = clean(raw_text.get("url", None))
                     else:
                         text = clean(str(raw_text))
-                        url = clean(data.get("url"))
 
                     node_data.append((
                         int(graph_id),
                         cluster_id,
                         int(idx),
-                        file_name,
-                        url,
+                        source,
                         text
                     ))
 
-                # 🚀 Insert all nodes
                 execute_values(cur, """
-                    INSERT INTO graph_nodes (graph_id, cluster_id, node_idx, file_name, url, text)
+                    INSERT INTO graph_nodes (graph_id, cluster_id, node_idx, source, text)
                     VALUES %s
                 """, node_data)
 
-                # Insert all edges
                 edge_data = [
     (
         int(graph_id),
-        int(u),         # <-- cast here
-        int(v),         # <-- and here
+        int(u),         
+        int(v),         
         float(data.get('weight', 1.0))
     )
     for u, v, data in G_nx.edges(data=True)]
@@ -159,13 +140,13 @@ class GraphPostgresStorage:
         with self.conn:
             with self.conn.cursor() as cur:
                 cur.execute("""
-                    SELECT node_idx, text, cluster_id, file_name, url
+                    SELECT node_idx, text, cluster_id, source
                     FROM graph_nodes
                     WHERE graph_id = %s
                 """, (graph_id,))
                 for row in cur.fetchall():
-                    node_id, text, cluster,file_name, url= row
-                    G.add_node(node_id, text=text, cluster=cluster,file_name=file_name,url=url)
+                    node_id, text, cluster,source= row
+                    G.add_node(node_id, text=text, cluster=cluster,source=source)
 
                 cur.execute("""
                     SELECT source_idx, target_idx, weight

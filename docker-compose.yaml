@@ -14,7 +14,7 @@ services:
       - CELERY_BROKER_URL=redis://dev-redis:6379/0
       - CELERY_RESULT_BACKEND=redis://dev-redis:6379/0
     depends_on:
-      - redis
+      - dev-redis
     volumes:
       # - dev_idc_data:/myapp/cache
       # - dev_idc_data:/myapp/cache/output
@@ -59,7 +59,7 @@ services:
       - CELERY_BROKER_URL=redis://dev-redis:6379/0
       - CELERY_RESULT_BACKEND=redis://dev-redis:6379/0
     depends_on:
-      - redis
+      - dev-redis
     volumes:
       # - dev_idc_data:/myapp/cache
       # - dev_idc_data:/myapp/cache/output
@@ -104,7 +104,7 @@ services:
       - CELERY_BROKER_URL=redis://dev-redis:6379/0
       - CELERY_RESULT_BACKEND=redis://dev-redis:6379/0
     depends_on:
-      - redis
+      - dev-redis
     volumes:
       # - dev_idc_data:/myapp/cache
       # - dev_idc_data:/myapp/cache/output
@@ -135,8 +135,8 @@ services:
               count: 1
               capabilities: [gpu]
 
-  redis:
-    image: "redis"
+  dev-redis:
+    image: "redislabs/redisgraph:latest"
     container_name: dev-redis
     ports:
       - "6379:6379"
