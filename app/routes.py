@@ -148,7 +148,7 @@ def train_vanna_doc():
             data = parse_file_data_only(file_path)
         
             res = vn.train(documentation=data["data"])
-            vn.add_document(db_id=res, doc_name=data["file_name"])
+            vn.add_document(db_id=res, doc_id=data["file_name"])
             current_app.logger.info(f"✅ Added documentation to vanna chroma:\n{res}\n")
 
         return jsonify({"ids": [res]}), 202

@@ -7,5 +7,6 @@ class Config:
 
     BASE_DIR = '/myapp/cache'
     GRAPH_DOC_UPLOAD=os.path.join(BASE_DIR,'graph-file-uploads')
+    SQL_UPLOAD_DIR_PATH=os.path.join(BASE_DIR,'sql-uploads')
     UPLOAD_DIR_PATH = os.path.join(BASE_DIR, 'uploads')
     ML_DIR_PATH = os.path.join(BASE_DIR, 'ml-model')
