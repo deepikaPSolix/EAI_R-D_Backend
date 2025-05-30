@@ -9,7 +9,7 @@ from app.graph_builder import GraphBuilder
 from app.models.doc_file import DocFile
 from app.cluster_classify import ClusterAndClassify
 from app.rag import RAG
-from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction, parse_graph_file
+from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction, parse_graph_file, parse_file_data_only
 from app.utils import delete_files
 from flask import request, jsonify, send_from_directory
 from app.file_processor import AudioFileProcessor
@@ -131,15 +131,25 @@ def classify():
 @main.route('/vanna/train/doc', methods=["POST"])
 def train_vanna_doc():
     try:
+        if 'files[]' not in request.files:
+            return jsonify({"error": "No files provided"})
+        
+        files = request.files.getlist('files[]')
         vn = MyVanna()
+
+        for file in files:
+            if file.filename == '':
+                return jsonify({"error": "Empty filename"})
+
+            # Save each file to the upload folder
+            file_path = os.path.join(current_app.config['SQL_UPLOAD_DIR_PATH'], file.filename)
+            file.save(file_path)
+
+            data = parse_file_data_only(file_path)
         
-        data = request.get_json()
-        if data is None:
-            return jsonify({"error": "No files provided"}), 400
-        
-        res = vn.train(documentation=data["file_data"])
-        vn.add_document(db_id=res, doc_id=data["file_id"])
-        current_app.logger.info(f"✅ Added documentation to vanna chroma:\n{res}\n")
+            res = vn.train(documentation=data["data"])
+            vn.add_document(db_id=res, doc_name=data["file_name"])
+            current_app.logger.info(f"✅ Added documentation to vanna chroma:\n{res}\n")
 
         return jsonify({"ids": [res]}), 202
     except Exception as e:
@@ -149,19 +159,30 @@ def train_vanna_doc():
 @main.route('/vanna/train/ddl', methods=["POST"])
 def train_vanna_ddl():
     try:
+        if 'files[]' not in request.files:
+            return jsonify({"error": "No files provided"})
+        
+        files = request.files.getlist('files[]')
         vn = MyVanna()
-        res = []
-        
-        data = request.get_json()
-        if data is None:
-            return jsonify({"error": "No files provided"}), 400
-        
-        full_text = data["file_data"]
-        ddl_statements = re.findall(r'CREATE TABLE.*?\);', full_text, re.DOTALL | re.IGNORECASE)
-        
-        for ddl in ddl_statements:
-            res.append(vn.train(ddl=ddl))
-            vn.add_document(db_id=res[-1], doc_id=data["file_id"])
+
+        for file in files:
+            if file.filename == '':
+                return jsonify({"error": "Empty filename"})
+
+            # Save each file to the upload folder
+            file_path = os.path.join(current_app.config['SQL_UPLOAD_DIR_PATH'], file.filename)
+            file.save(file_path)
+
+            data = parse_file_data_only(file_path)
+            res = []
+            
+            full_text = data["data"]
+            ddl_statements = re.findall(r'CREATE TABLE.*?\);', full_text, re.DOTALL | re.IGNORECASE)
+            
+            for ddl in ddl_statements:
+                db_id = vn.train(ddl=ddl)
+                res.append(db_id)
+                vn.add_document(db_id=db_id, doc_id=data["file_name"])
 
         current_app.logger.info(f"✅ Added {str(len(ddl_statements))} DDL to vanna chroma")
         return jsonify({"ids": res}), 202
@@ -177,8 +198,8 @@ def del_vanna_training_data():
     id_list = df["id"].tolist()
     for id in id_list:
         removed = vn.remove_training_data(id=id)
-        vn.delete_document(id)
         res.append({"id": id, "removed" : removed})
+    vn.delete_all()
     return res, 202
 
 @main.route('/docs/vanna/id/<id>', methods=["DELETE"])
@@ -194,6 +215,12 @@ def get_vanna_training_data():
     df = vn.get_training_data()
     df_list = df.to_dict(orient='list')
     return df_list["id"], 202
+
+@main.route('/docs/vanna/names', methods=["GET"])
+def get_vanna_training_data():
+    vn = MyVanna()
+    names = vn.list_document_names()
+    return list(names), 202
 
 @main.route('/docs/vanna/id/<id>', methods=["GET"])
 def get_vanna_doc_from_db_id(id):

@@ -25,6 +25,12 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
     def delete_document(self, db_id):
         if db_id in MyVanna.document_store:
             del MyVanna.document_store[db_id]
+
+    def delete_all(self):
+        MyVanna.document_store = {}
         
     def list_documents(self):
         return list(MyVanna.document_store.keys())
+    
+    def list_document_names(self):
+        return set(MyVanna.document_store.values())
