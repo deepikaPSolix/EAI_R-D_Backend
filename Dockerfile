@@ -33,12 +33,6 @@ WORKDIR /myapp
 # Copy your app source
 COPY ./app /myapp/app
 
-# Copy the vanna package
-# COPY ./vanna /myapp/vanna
-
-# # Install the vanna package
-# RUN pip install /myapp/vanna
-
 # Obfuscate
 RUN pyarmor gen -O dist app
 
@@ -53,9 +47,6 @@ COPY --from=pyarmor_builder /myapp/dist /myapp/
 # If you have extra custom code (like opik library) or config:
 COPY opik /usr/local/lib/python3.11/site-packages/opik
 COPY celery_worker.py /myapp/
-# Vanna
-COPY ./vanna /myapp/vanna
-RUN pip install /myapp/vanna
 
 ENV NLTK_DATA=/usr/share/nltk_data
 RUN mkdir -p $NLTK_DATA && \
