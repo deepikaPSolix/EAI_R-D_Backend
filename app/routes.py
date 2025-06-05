@@ -191,7 +191,7 @@ def query_rag2():
 
         # Voice feature-- Summary in 50 words
         summary_prompt = (
-        f"Summarize the following answer in less than or equal to 50 words.\n"
+        f"Summarize the following answer in less than or equal to 30 words.\n"
         f"Curated Query: \"{curated_query}\"\n"
         f"Answer: \"{clean_response}\"")
 
@@ -528,6 +528,19 @@ def graph_query():
             }
        
         # current_app.logger.info(f"✅ Graph Query Result: {response_json}")
+
+        rag = RAG(ChromaDB(),model_source="together")
+
+        summary_prompt = (
+        f"Summarize the following answer in less than or equal to 30 words.\n"
+        f"Curated Query: \"{data['query']}\"\n"
+        f"Answer: \"{clean_text}\"")
+
+        summary_resp = rag.model.invoke(summary_prompt)
+        summary_text = summary_resp.content.strip()
+        # voice feature - end
+
+        response_json["summary"] = summary_text
         filename = result.get("sources","")
         if links:
             response_json["link"] = links[0]
