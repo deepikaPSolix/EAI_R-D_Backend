@@ -9,7 +9,7 @@ from app.graph_builder import GraphBuilder
 from app.models.doc_file import DocFile
 from app.cluster_classify import ClusterAndClassify
 from app.rag import RAG
-from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction, parse_graph_file
+from app.tasks import evaluationFunction, process_file_workflow, screen2EvaluationFunction, parse_graph_file, parse_file_data_only
 from app.utils import delete_files
 from flask import request, jsonify, send_from_directory
 from app.file_processor import AudioFileProcessor
@@ -31,6 +31,8 @@ import glob
 import tempfile
 import subprocess
 import psycopg2
+from docx import Document
+from app.vanna_class import MyVanna
 
 doc_updates = 0
 main = Blueprint('main', __name__)
@@ -139,6 +141,130 @@ def classify():
 
     return jsonify({"labels": labels.to_json(orient='records')}), 201
 
+@main.route('/vanna/train/doc', methods=["POST"])
+def train_vanna_doc():
+    try:
+        if 'files[]' not in request.files:
+            return jsonify({"error": "No files provided"})
+        
+        files = request.files.getlist('files[]')
+        vn = MyVanna()
+
+        for file in files:
+            if file.filename == '':
+                return jsonify({"error": "Empty filename"})
+
+            # Save each file to the upload folder
+            file_path = os.path.join(current_app.config['SQL_UPLOAD_DIR_PATH'], file.filename)
+            file.save(file_path)
+
+            data = parse_file_data_only(file_path)
+        
+            res = vn.train(documentation=data["data"])
+            vn.add_document(db_id=res, doc_id=data["file_name"])
+            current_app.logger.info(f"✅ Added documentation to vanna chroma:\n{res}\n")
+
+        return jsonify({"ids": [res]}), 202
+    except Exception as e:
+        current_app.logger.error(str(e))
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+@main.route('/vanna/train/ddl', methods=["POST"])
+def train_vanna_ddl():
+    try:
+        if 'files[]' not in request.files:
+            return jsonify({"error": "No files provided"})
+        
+        files = request.files.getlist('files[]')
+        vn = MyVanna()
+
+        for file in files:
+            if file.filename == '':
+                return jsonify({"error": "Empty filename"})
+
+            # Save each file to the upload folder
+            file_path = os.path.join(current_app.config['SQL_UPLOAD_DIR_PATH'], file.filename)
+            file.save(file_path)
+
+            data = parse_file_data_only(file_path)
+            res = []
+            
+            full_text = data["data"]
+            ddl_statements = re.findall(r'CREATE TABLE.*?\);', full_text, re.DOTALL | re.IGNORECASE)
+            
+            for ddl in ddl_statements:
+                db_id = vn.train(ddl=ddl)
+                res.append(db_id)
+                vn.add_document(db_id=db_id, doc_id=data["file_name"])
+
+        current_app.logger.info(f"✅ Added {str(len(ddl_statements))} DDL to vanna chroma")
+        return jsonify({"ids": res}), 202
+    except Exception as e:
+        current_app.logger.error(str(e))
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+@main.route('/docs/vanna', methods=["DELETE"])
+def del_vanna_training_data():
+    vn = MyVanna()
+    res = []
+    df = vn.get_training_data()
+    id_list = df["id"].tolist()
+    for id in id_list:
+        removed = vn.remove_training_data(id=id)
+        res.append({"id": id, "removed" : removed})
+    vn.delete_all()
+    return res, 202
+
+@main.route('/docs/vanna/id/<id>', methods=["DELETE"])
+def del_vanna_training_data_by_id(id):
+    vn = MyVanna()
+    removed = vn.remove_training_data(id=id)
+    vn.delete_document(id)
+    return jsonify({"id": id, "removed" : removed}), 202
+
+@main.route('/docs/vanna', methods=["GET"])
+def get_vanna_training_data():
+    vn = MyVanna()
+    df = vn.get_training_data()
+    df_list = df.to_dict(orient='list')
+    return df_list["id"], 202
+
+@main.route('/docs/vanna/names', methods=["GET"])
+def get_vanna_training_data_names():
+    vn = MyVanna()
+    names = vn.list_document_names()
+    return list(names), 202
+
+@main.route('/docs/vanna/id/<id>', methods=["GET"])
+def get_vanna_doc_from_db_id(id):
+    vn = MyVanna()
+    doc_id = vn.get_document(id)
+    if doc_id is None:
+        return jsonify({"error": "Document not found"}), 404
+    return doc_id, 202
+
+@main.route('/rag2/query/vanna', methods=["POST"])
+def query_vanna(data=None):
+    try:
+        if data is None:
+            data = request.get_json()
+        if data is None:
+            raise ValueError("Missing data in the request body")
+        vn = MyVanna()
+
+        current_app.logger.info(f"Vanna query: {data['query']}")
+        sql, df, _ = vn.ask(
+            question=data["query"],
+            print_results=False,
+            auto_train=True,
+            visualize=False,
+            allow_llm_to_see_data=False
+        )
+        
+        return jsonify({"response": sql, "query_result": df.to_json(orient='records') if df is not None else None})
+    except Exception as e:
+        current_app.logger.error(str(e), exc_info=True)
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
 @main.route('/rag/query', methods=["POST"])
 def query_rag():

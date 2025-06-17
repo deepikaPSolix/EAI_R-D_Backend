@@ -28,6 +28,14 @@ class DynamicExtractor:
         return merged_data
 
     def merge_extracted_data(self, extracted_data: List[AttributesModel]) -> AttributesModel:
+        if not extracted_data:
+            return AttributesModel(
+                sensitivity=0,
+                responsible_values=[],
+                retention_time="",
+                data_classifiers=[],
+                attributes={}
+            )
         max_sens_obj = max(extracted_data, key=lambda attr: attr.sensitivity)
         sensitivity, responsible_values = max_sens_obj.sensitivity, max_sens_obj.responsible_values
 
