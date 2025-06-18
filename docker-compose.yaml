@@ -1,42 +1,56 @@
+name: idc-uat
+
+networks:
+  uat_network:
+    name: uat_network
+    driver: bridge
+    external: true
+
+volumes:
+  uat_cache:
+  uat_nltk_data:
+  uat_output:
+  uat_logs:
+  uat_ml_models:
+  uat_uploads:
+  uat_chromadb:
+  uat_whisper:
+  uat_paddleocr:
+  uat_chroma_model:
+  uat_graph_file_uploads:
+  uat_sql_uploads:
+
 services:
   flask-app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: dev-flask-app
-    # restart: always
+    container_name: uat-flask-app
+    restart: always
     ports:
-      - "5000:5000"
+      - "5001:5000"  # Use different port from dev
     env_file:
       - .env
     environment:
       - FLASK_ENV=development
-      - CELERY_BROKER_URL=redis://dev-redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://dev-redis:6379/0
+      - CELERY_BROKER_URL=redis://uat-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://uat-redis:6379/0
     depends_on:
-      - dev-redis
+      - redis
     volumes:
-      # - dev_idc_data:/myapp/cache
-      # - dev_idc_data:/myapp/cache/output
-      # - dev_idc_data:/myapp/cache/ml-model
-      # - dev_idc_data:/myapp/cache/uploads
-      # - dev_idc_data:/myapp/cache/chromadb
-      # - dev_idc_data:/root/.cache/whisper
-      # - dev_idc_data:/root/.cache/chroma
-      # - dev_idc_data:/root/.paddleocr
-      # - dev_idc_data:/usr/share/nltk_data 
-      # - dev_idc_data:/myapp/cache/logs
-      - ./cache:/myapp/cache
-      - ./cache/output:/myapp/cache/output
-      - ./cache/ml-model:/myapp/cache/ml-model
-      - ./cache/graph-file-uploads:/myapp/cache/graph-file-uploads
-      - ./cache/sql-uploads:/myapp/cache/sql-uploads
-      - ./cache/uploads:/myapp/cache/uploads
-      - ./cache/chroma/db:/myapp/cache/chromadb
-      - ./cache/whisper:/root/.cache/whisper
-      - ./cache/chroma/models:/root/.cache/chroma
-      - ./cache/paddleocr:/root/.paddleocr
-      - nltk_data:/usr/share/nltk_data 
+      - uat_cache:/myapp/cache
+      - uat_logs:/myapp/cache/logs
+      - uat_sql_uploads:/myapp/cache/sql-uploads
+      - uat_graph_file_uploads:/myapp/cache/graph-file-uploads
+      - uat_ml_models:/myapp/cache/ml-model
+      - uat_uploads:/myapp/cache/uploads
+      - uat_chromadb:/myapp/cache/chromadb
+      - uat_chroma_model:/root/.cache/chroma
+      - uat_output:/myapp/cache/output
+      - uat_whisper:/root/.cache/whisper
+      - uat_paddleocr:/root/.paddleocr
+      - uat_nltk_data:/usr/share/nltk_data
+
     deploy:
       resources:
         reservations:
@@ -44,44 +58,38 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    networks:
+      - uat_network
 
   celery-worker:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: dev-celery-worker
+    container_name: uat-celery-worker
     restart: always
     command: celery -A celery_worker.celery worker --autoscale=10,2 --loglevel=info -Q cpu_queue
     env_file:
       - .env
     environment:
-      - FLASK_ENV=development
-      - CELERY_BROKER_URL=redis://dev-redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://dev-redis:6379/0
+      - FLASK_ENV=production
+      - CELERY_BROKER_URL=redis://uat-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://uat-redis:6379/0
     depends_on:
-      - dev-redis
+      - redis
     volumes:
-      # - dev_idc_data:/myapp/cache
-      # - dev_idc_data:/myapp/cache/output
-      # - dev_idc_data:/myapp/cache/ml-model
-      # - dev_idc_data:/myapp/cache/uploads
-      # - dev_idc_data:/myapp/cache/chromadb
-      # - dev_idc_data:/root/.cache/whisper
-      # - dev_idc_data:/root/.cache/chroma
-      # - dev_idc_data:/root/.paddleocr
-      # - dev_idc_data:/usr/share/nltk_data 
-      # - dev_idc_data:/myapp/cache/logs
-      - ./cache:/myapp/cache
-      - ./cache/output:/myapp/cache/output
-      - ./cache/ml-model:/myapp/cache/ml-model
-      - ./cache/uploads:/myapp/cache/uploads
-      - ./cache/graph-file-uploads:/myapp/cache/graph-file-uploads
-      - ./cache/sql-uploads:/myapp/cache/sql-uploads
-      - ./cache/chroma/db:/myapp/cache/chromadb
-      - ./cache/whisper:/root/.cache/whisper
-      - ./cache/chroma/models:/root/.cache/chroma
-      - ./cache/paddleocr:/root/.paddleocr
-      - nltk_data:/usr/share/nltk_data 
+      - uat_cache:/myapp/cache
+      - uat_logs:/myapp/cache/logs
+      - uat_output:/myapp/cache/output
+      - uat_sql_uploads:/myapp/cache/sql-uploads
+      - uat_graph_file_uploads:/myapp/cache/graph-file-uploads
+      - uat_ml_models:/myapp/cache/ml-model
+      - uat_uploads:/myapp/cache/uploads
+      - uat_chromadb:/myapp/cache/chromadb
+      - uat_whisper:/root/.cache/whisper
+      - uat_paddleocr:/root/.paddleocr
+      - uat_nltk_data:/usr/share/nltk_data
+      - uat_chroma_model:/root/.cache/chroma
+
     deploy:
       resources:
         reservations:
@@ -89,44 +97,38 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    networks:
+      - uat_network
 
   celery-worker-gpu:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: dev-celery-worker-gpu
+    container_name: uat-celery-worker-gpu
     restart: always
     command: celery -A celery_worker.celery worker --concurrency=1 --loglevel=info -Q gpu_queue
     env_file:
       - .env
     environment:
-      - FLASK_ENV=development
-      - CELERY_BROKER_URL=redis://dev-redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://dev-redis:6379/0
+      - FLASK_ENV=production
+      - CELERY_BROKER_URL=redis://uat-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://uat-redis:6379/0
     depends_on:
-      - dev-redis
+      - redis
     volumes:
-      # - dev_idc_data:/myapp/cache
-      # - dev_idc_data:/myapp/cache/output
-      # - dev_idc_data:/myapp/cache/ml-model
-      # - dev_idc_data:/myapp/cache/uploads
-      # - dev_idc_data:/myapp/cache/chromadb
-      # - dev_idc_data:/root/.cache/whisper
-      # - dev_idc_data:/root/.cache/chroma
-      # - dev_idc_data:/root/.paddleocr
-      # - dev_idc_data:/usr/share/nltk_data 
-      # - dev_idc_data:/myapp/cache/logs
-      - ./cache:/myapp/cache
-      - ./cache/output:/myapp/cache/output
-      - ./cache/ml-model:/myapp/cache/ml-model
-      - ./cache/graph-file-uploads:/myapp/cache/graph-file-uploads
-      - ./cache/sql-uploads:/myapp/cache/sql-uploads
-      - ./cache/uploads:/myapp/cache/uploads
-      - ./cache/chroma/db:/myapp/cache/chromadb
-      - ./cache/whisper:/root/.cache/whisper
-      - ./cache/chroma/models:/root/.cache/chroma
-      - ./cache/paddleocr:/root/.paddleocr
-      - nltk_data:/usr/share/nltk_data 
+      - uat_cache:/myapp/cache
+      - uat_logs:/myapp/cache/logs
+      - uat_output:/myapp/cache/output
+      - uat_sql_uploads:/myapp/cache/sql-uploads
+      - uat_graph_file_uploads:/myapp/cache/graph-file-uploads
+      - uat_ml_models:/myapp/cache/ml-model
+      - uat_uploads:/myapp/cache/uploads
+      - uat_chromadb:/myapp/cache/chromadb
+      - uat_whisper:/root/.cache/whisper
+      - uat_paddleocr:/root/.paddleocr
+      - uat_nltk_data:/usr/share/nltk_data
+      - uat_chroma_model:/root/.cache/chroma
+
     deploy:
       resources:
         reservations:
@@ -134,15 +136,14 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    networks:
+      - uat_network
 
-  dev-redis:
+  redis:
     image: "redislabs/redisgraph:latest"
-    container_name: dev-redis
+    container_name: uat-redis
     ports:
-      - "6379:6379"
+      - "6380:6379"  # Use a different Redis port from dev
     restart: always
-
-
-volumes:
-  dev_idc_data: 
-  nltk_data:
+    networks:
+      - uat_network

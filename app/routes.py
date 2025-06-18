@@ -675,6 +675,7 @@ def graph_query():
             if filename:
                 try:
                     file_url = url_for('main.download_graph_file', filename=filename, _external=True)
+                    file_url = f"http://192.168.1.116:5001/graph/download/{filename}"
                     response_json["sources"] = [{"name": filename, "url": file_url}]
                 except Exception as e:
                     current_app.logger.warning(f"⚠️ Skipped building file URL due to: {e}")

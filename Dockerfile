@@ -26,8 +26,9 @@ RUN crawl4ai-setup
 #Builder docker
 
 FROM python:3.11-slim AS pyarmor_builder
-RUN pip install pyarmor
-
+# Prevent timeout while installing pyarmor
+RUN pip install --upgrade pip && \
+    pip install --default-timeout=120 --retries=5 pyarmor
 WORKDIR /myapp
 
 # Copy your app source
