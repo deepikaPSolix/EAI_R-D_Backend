@@ -202,7 +202,40 @@ def train_vanna_ddl():
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
-    
+
+@main.route('/vanna/dbconnect', methods=["POST"])
+def vanna_db_connect():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    # Extract connection details from the request
+    db_host = data.get("DBHostName")
+    db_port = data.get("DBPort")
+    db_name = data.get("DBName")
+    db_user = data.get("DBUserName")
+    db_password = data.get("DBPassword")
+
+    # Establish a database connection
+    current_app.logger.info(f"Attempting DB connection to {db_host}:{db_port}/{db_name} as {db_user}")
+
+    try:
+        vn = MyVanna()
+        vn.connect_to_postgres(
+            host=db_host,
+            dbname=db_name,
+            user=db_user,
+            password=db_password,
+            port=db_port
+        )
+    except Exception as e:
+        current_app.logger.error(f"DB connection failed: {str(e)}")
+        return jsonify({"error": f"Failed to connect to Vanna DB: {str(e)}"})
+
+    # Simulate a successful connection
+    current_app.logger.info(f"DB connection successful")
+    return jsonify({"message": "Connected to Vanna DB successfully"}), 200
+
 @main.route('/docs/vanna', methods=["DELETE"])
 def del_vanna_training_data():
     vn = MyVanna()
