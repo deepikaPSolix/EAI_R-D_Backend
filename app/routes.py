@@ -202,6 +202,44 @@ def train_vanna_ddl():
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+@main.route('/dbconnect', methods=["POST"])
+def store_db_details(details: Dict[str, str]):
+    """
+    Store database connection details in env.
+    """
+    os.environ["DB_HOST"] = details["DBHostName"]
+    os.environ["DB_PORT"] = details["DBPort"]
+    os.environ["DB_NAME"] = details["DBName"]
+    os.environ["DB_USER"] = details["DBUserName"]
+    os.environ["DB_PASSWORD"] = details["DBPassword"]
+    
+    return jsonify({"message": "Database connection details stored successfully"}), 200
+
+@main.route('/dbconnect', methods=["GET"])
+def get_db_connection(details: Dict[str, str]):
+    """
+    Get database connection.
+    """
+
+    db_details = {
+        "DBHostName": os.getenv("DB_HOST", "localhost"),
+        "DBPort": os.getenv("DB_PORT", "5432"),
+        "DBName": os.getenv("DB_NAME", "vanna_db"),
+        "DBUserName": os.getenv("DB_USER", "vanna_user"),
+        "DBPassword": os.getenv("DB_PASSWORD", "vanna_password")
+    }
+
+    conn = psycopg2.connect(
+        host=db_details["DBHostName"],
+        port=db_details["DBPort"],
+        dbname=db_details["DBName"],
+        user=db_details["DBUserName"],
+        password=db_details["DBPassword"]
+    )
+    current_app.logger.info(f"Connected to Vanna DB at {db_details['DBHostName']}:{db_details['DBPort']}/{db_details['DBName']} as {db_details['DBUserName']}")
+    
+    return conn, 200
 
 @main.route('/vanna/dbconnect', methods=["POST"])
 def vanna_db_connect():
@@ -215,6 +253,14 @@ def vanna_db_connect():
     db_name = data.get("DBName")
     db_user = data.get("DBUserName")
     db_password = data.get("DBPassword")
+
+    store_db_details({
+        "DBHostName": db_host,
+        "DBPort": db_port,
+        "DBName": db_name,
+        "DBUserName": db_user,
+        "DBPassword": db_password
+    })
 
     # Establish a database connection
     current_app.logger.info(f"Attempting DB connection to {db_host}:{db_port}/{db_name} as {db_user}")
@@ -293,7 +339,11 @@ def query_vanna(data=None):
             visualize=False,
             allow_llm_to_see_data=False
         )
-        
+        current_app.logger.info(f"SQL Query: {sql}")
+        if df is not None:
+            current_app.logger.info(f"DataFrame shape: {df.shape}")
+        else:
+            current_app.logger.info("DataFrame is None, no data returned from Vanna.")
         return jsonify({"response": sql, "query_result": df.to_json(orient='records') if df is not None else None})
     except Exception as e:
         current_app.logger.error(str(e), exc_info=True)
