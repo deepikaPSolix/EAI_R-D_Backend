@@ -1,6 +1,9 @@
 import os
+from flask import current_app
 from vanna.chromadb import ChromaDB_VectorStore
 from vanna.openai import OpenAI_Chat
+
+from app.db_utils import open_db_connection
 
 class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
     document_store = {}
@@ -12,6 +15,16 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
         }):
         ChromaDB_VectorStore.__init__(self, config=config)
         OpenAI_Chat.__init__(self, config=config)
+
+    def chat_completion(self, messages, **kwargs):
+        """
+        Wrapper kept only for legacy code that still expects
+        `self.chat_completion(messages)["content"]`.
+
+        Under the hood it just forwards to `submit_prompt()` and wraps the
+        returned string in the tiny dict old callers expect.
+        """
+        return {"content": self.submit_prompt(messages, **kwargs)}
 
     def add_document(self, db_id, doc_id):
         MyVanna.document_store[db_id] = doc_id
@@ -106,5 +119,181 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
                     message_log.append(self.assistant_message(example["sql"]))
 
         message_log.append(self.user_message(question))
+        current_app.logger.info(f"from VANNA : {message_log}")
 
         return message_log
+    
+    # ------------------------------- pre-processing metadadata -------------------------------
+
+    def train_with_fallback_doc(self, ddl_list: list[str] | None = None) -> str:
+       
+        ddl_list = ddl_list or []
+
+        samples = self._extract_sample_data_from_db()
+        context_md = self.build_metadata(ddl_list, samples)
+        current_app.logger.info(f"Making LLM call to generate metadata from DDL and sample rows")
+        sys_prompt =  (
+                        """ You are a senior data  analyst. Given the SQL DDL and a small sample of table data, analyze the structure and actual data patterns to infer relationships, constraints, and meaning.
+                            For each table, output metadata in Markdown starting with: Table: <table_name>
+                            Then generate a 5-column table with headers:
+                            | Column Name | Data Type | Constraints | Default/Foreign Key | Description |
+                            Identify inferred primary keys, foreign keys, and unique columns based on value patterns.
+                            Leave “—” for blanks.
+                            Give clear descriptions of what each column represents based on data content.
+                            Infer logical joins, even if not defined in the DDL.
+                            Do not output SQL or narrative—only the structured metadata per table."""
+                    )
+
+        messages = [
+            self.system_message(sys_prompt),
+            self.user_message(context_md)
+        ]
+        current_app.logger.info(f"Context Sending to LLM: {messages}")
+        generated_doc = self.chat_completion(messages)["content"]
+        current_app.logger.info(f"LLM returned metadata: {generated_doc}")
+
+        db_id = self.train(documentation=generated_doc)
+        current_app.logger.info(f"Generated metadata document is added to vanna chroma: {db_id}")
+
+
+        self.add_document(db_id=db_id, doc_id=db_id)
+        return db_id
+
+    
+    def _extract_sample_data_from_db(self, limit: int = 3) -> dict:
+
+        conn = open_db_connection()
+        cur  = conn.cursor() 
+        if not conn:
+            current_app.logger.error("Failed to connect to the database")
+            raise Exception("Failed to connect to the database")
+        cur = conn.cursor()
+        cur.execute(""" SELECT table_name FROM   information_schema.tables WHERE  table_schema = 'public'; """)
+        samples = {}
+        for (table,) in cur.fetchall():
+            cur.execute(f"SELECT * FROM {table} LIMIT {limit}")
+            rows = cur.fetchall()
+            cols = [c.name for c in cur.description]
+            samples[table] = {"columns": cols, "rows": rows}
+        cur.close(); conn.close()
+        return samples
+
+    def build_metadata(self, ddl_list: list[str], samples: dict) -> str:
+        parts = ["## All DDL"]
+        parts += [f"```sql\n{ddl.strip()}\n```" for ddl in ddl_list]
+
+        for table, meta in samples.items():
+            parts.append(f"\n## {table}")
+            parts.append("Columns: " + ", ".join(meta["columns"]))
+            if meta["rows"]:
+                parts.append("Sample rows:")
+                for r in meta["rows"]:
+                    parts.append("  - " + ", ".join(map(str, r)))
+            else:
+                parts.append("*no rows*")
+        return "\n".join(parts)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # def extract_sample_data_from_db():
+    #     conn = get_db_connection()  # Your existing function
+    #     cursor = conn.cursor()
+        
+    #     cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
+    #     tables = cursor.fetchall()
+        
+    #     table_samples = {}
+    #     for table in tables:
+    #         table_name = table[0]
+    #         cursor.execute(f"SELECT * FROM {table_name} LIMIT 3")
+    #         rows = cursor.fetchall()
+    #         columns = [desc[0] for desc in cursor.description]
+    #         table_samples[table_name] = {
+    #             "columns": columns,
+    #             "rows": rows
+    #         }
+
+    #     cursor.close()
+    #     conn.close()
+    #     return table_samples
+    
+    # def build_metadata_prompt(self, ddl_list: list[str], samples: dict[str, dict]) -> str:
+     
+    #     pieces = [
+    #         "# Auto-generated fallback documentation",
+    #         "Below are the DDL statements followed by a few sample rows "
+    #         "for each table. Use them to understand the schema."
+    #     ]
+
+    #     # DDL first
+    #     pieces.append("## DDL")
+    #     pieces.extend([f"```sql\n{ddl.strip()}\n```" for ddl in ddl_list])
+
+    #     # Then per-table sample rows
+    #     for tbl, data in samples.items():
+    #         pieces.append(f"\n## {tbl}")
+    #         pieces.append("Columns: " + ", ".join(data["columns"]))
+
+    #         if data["rows"]:
+    #             pieces.append("Sample rows:")
+    #             for r in data["rows"]:
+    #                 pieces.append("  - " + ", ".join(map(str, r)))
+    #         else:
+    #             pieces.append("*(no rows in table)*")
+
+    #     return "\n".join(pieces)
+    
+    # def train_with_fallback_doc(self, ddl_list: list[str] = None) -> str:
+    #     """
+    #     1) Pull live samples
+    #     2) Combine with any DDL you pass in (or empty list)
+    #     3) train() → add_document() → return db_id
+    #     """
+    #     ddl_list = ddl_list or []
+
+    #     samples = self.extract_sample_data_from_db()
+    #     full_doc = self.build_metadata_prompt(ddl_list, samples)
+
+    #     db_id = self.train(documentation=full_doc)
+    #     self.add_document(db_id=db_id, doc_id="__auto_generated_fallback__")
+    #     return db_id

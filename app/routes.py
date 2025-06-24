@@ -33,6 +33,8 @@ import subprocess
 import psycopg2
 from docx import Document
 from app.vanna_class import MyVanna
+from app.db_utils import open_db_connection        
+
 
 doc_updates = 0
 main = Blueprint('main', __name__)
@@ -144,11 +146,15 @@ def classify():
 @main.route('/vanna/train/doc', methods=["POST"])
 def train_vanna_doc():
     try:
-        if 'files[]' not in request.files:
-            return jsonify({"error": "No files provided"})
+        files = request.files.getlist('files[]') if 'files[]' in request.files else []
         
-        files = request.files.getlist('files[]')
         vn = MyVanna()
+
+        files = request.files.getlist('files[]')
+        #  If no valid doc uploaded, call fallback
+        if not files or all(f.filename.strip() == '' for f in files):
+            db_id = vn.train_with_fallback_doc()
+            return jsonify({"id": db_id, "status": "trained with generated metadata"}), 202
 
         for file in files:
             if file.filename == '':
@@ -218,29 +224,11 @@ def store_db_details(details: Dict[str, str]):
 
 @main.route('/dbconnect', methods=["GET"])
 def get_db_connection(details: Dict[str, str]):
-    """
-    Get database connection.
-    """
-
-    db_details = {
-        "DBHostName": os.getenv("DB_HOST", "localhost"),
-        "DBPort": os.getenv("DB_PORT", "5432"),
-        "DBName": os.getenv("DB_NAME", "vanna_db"),
-        "DBUserName": os.getenv("DB_USER", "vanna_user"),
-        "DBPassword": os.getenv("DB_PASSWORD", "vanna_password")
-    }
-
-    conn = psycopg2.connect(
-        host=db_details["DBHostName"],
-        port=db_details["DBPort"],
-        dbname=db_details["DBName"],
-        user=db_details["DBUserName"],
-        password=db_details["DBPassword"]
-    )
-    current_app.logger.info(f"Connected to Vanna DB at {db_details['DBHostName']}:{db_details['DBPort']}/{db_details['DBName']} as {db_details['DBUserName']}")
     
+    conn = open_db_connection()
+    current_app.logger.info("Connected!")
     return conn, 200
-
+    
 @main.route('/vanna/dbconnect', methods=["POST"])
 def vanna_db_connect():
     data = request.get_json()
