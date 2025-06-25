@@ -6,7 +6,7 @@ async def run_trial_query(condition: str, phase: str | None = None, size: int = 
     """
     Asynchronously fetches clinical trials matching the given parameters.
     """
-    q = TrialQuery(condition=condition, phase=phase, size=size)
+    q = TrialQuery(condition=condition, phase=phase, page_size=size)
     raw = await search_trials(q, output_json=True)
     return json.loads(raw)
 
