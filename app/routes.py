@@ -318,13 +318,15 @@ def query_vanna(data=None):
         if data is None:
             raise ValueError("Missing data in the request body")
         vn = MyVanna()
-        vn.connect_to_postgres(
-            host="192.168.1.116",
-            dbname="songdb",
-            user="postgres",
-            password="12345",
-            port=25432
-        )
+        if (os.environ["DB_HOST"] and os.environ["DB_NAME"] and os.environ["DB_USER"] and os.environ["DB_PASSWORD"] and os.environ["DB_PORT"]):
+            vn.connect_to_postgres(
+                host=os.environ["DB_HOST"],
+                dbname=os.environ["DB_NAME"],
+                user=os.environ["DB_USER"],
+                password=os.environ["DB_PASSWORD"],
+                port=os.environ["DB_PORT"]
+            )
+        
         current_app.logger.info(f"Vanna query: {data['query']}")
         sql, df, fig = vn.ask(
                 question=data["query"],
