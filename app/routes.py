@@ -264,11 +264,11 @@ def vanna_db_connect():
         )
     except Exception as e:
         current_app.logger.error(f"DB connection failed: {str(e)}")
-        return jsonify({"error": f"Failed to connect to Vanna DB: {str(e)}"})
+        return jsonify({"success": False, "message": f"Failed to connect to database: {str(e)}"})
 
     # Simulate a successful connection
     current_app.logger.info(f"DB connection successful")
-    return jsonify({"message": "Connected to Vanna DB successfully"}), 200
+    return jsonify({"success": True, "message": "Connected to database successfully"}), 200
 
 @main.route('/docs/vanna', methods=["DELETE"])
 def del_vanna_training_data():
@@ -318,21 +318,28 @@ def query_vanna(data=None):
         if data is None:
             raise ValueError("Missing data in the request body")
         vn = MyVanna()
-
-        current_app.logger.info(f"Vanna query: {data['query']}")
-        sql, df, _ = vn.ask(
-            question=data["query"],
-            print_results=False,
-            auto_train=True,
-            visualize=False,
-            allow_llm_to_see_data=False
+        vn.connect_to_postgres(
+            host="192.168.1.116",
+            dbname="songdb",
+            user="postgres",
+            password="12345",
+            port=25432
         )
+        current_app.logger.info(f"Vanna query: {data['query']}")
+        sql, df, fig = vn.ask(
+                question=data["query"],
+                print_results=False,
+                auto_train=False,
+                visualize=True,
+                allow_llm_to_see_data=True
+            )
+        
         current_app.logger.info(f"SQL Query: {sql}")
         if df is not None:
             current_app.logger.info(f"DataFrame shape: {df.shape}")
         else:
             current_app.logger.info("DataFrame is None, no data returned from Vanna.")
-        return jsonify({"response": sql, "query_result": df.to_json(orient='records') if df is not None else None})
+        return jsonify({"response": sql, "query_result": df.head().to_json(orient='records') if df is not None else None, "fig": fig.to_json() if fig is not None else None}), 200
     except Exception as e:
         current_app.logger.error(str(e), exc_info=True)
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
