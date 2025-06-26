@@ -130,6 +130,8 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
         ddl_list = ddl_list or []
 
         samples = self._extract_sample_data_from_db()
+        if samples is None:
+            return None
         context_md = self.build_metadata(ddl_list, samples)
         current_app.logger.info(f"Making LLM call to generate metadata from DDL and sample rows")
         sys_prompt =  (
@@ -161,21 +163,24 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
 
     
     def _extract_sample_data_from_db(self, limit: int = 3) -> dict:
-
-        conn = open_db_connection()
-        cur  = conn.cursor() 
-        if not conn:
+        try:
+            conn = open_db_connection()
+            cur  = conn.cursor() 
+            if not conn:
+                current_app.logger.error("Failed to connect to the database")
+                raise Exception("Failed to connect to the database")
+            cur = conn.cursor()
+            cur.execute(""" SELECT table_name FROM   information_schema.tables WHERE  table_schema = 'public'; """)
+            samples = {}
+            for (table,) in cur.fetchall():
+                cur.execute(f"SELECT * FROM {table} LIMIT {limit}")
+                rows = cur.fetchall()
+                cols = [c.name for c in cur.description]
+                samples[table] = {"columns": cols, "rows": rows}
+            cur.close(); conn.close()
+        except Exception as e:
             current_app.logger.error("Failed to connect to the database")
-            raise Exception("Failed to connect to the database")
-        cur = conn.cursor()
-        cur.execute(""" SELECT table_name FROM   information_schema.tables WHERE  table_schema = 'public'; """)
-        samples = {}
-        for (table,) in cur.fetchall():
-            cur.execute(f"SELECT * FROM {table} LIMIT {limit}")
-            rows = cur.fetchall()
-            cols = [c.name for c in cur.description]
-            samples[table] = {"columns": cols, "rows": rows}
-        cur.close(); conn.close()
+            return None
         return samples
 
     def build_metadata(self, ddl_list: list[str], samples: dict) -> str:

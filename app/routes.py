@@ -318,13 +318,13 @@ def query_vanna(data=None):
         if data is None:
             raise ValueError("Missing data in the request body")
         vn = MyVanna()
-        if (os.environ["DB_HOST"] and os.environ["DB_NAME"] and os.environ["DB_USER"] and os.environ["DB_PASSWORD"] and os.environ["DB_PORT"]):
+        if (os.getenv("DB_HOST") and os.getenv("DB_NAME") and os.getenv("DB_USER") and os.getenv("DB_PASSWORD") and os.getenv("DB_PORT")):
             vn.connect_to_postgres(
-                host=os.environ["DB_HOST"],
-                dbname=os.environ["DB_NAME"],
-                user=os.environ["DB_USER"],
-                password=os.environ["DB_PASSWORD"],
-                port=os.environ["DB_PORT"]
+                host= os.getenv("DB_HOST"),
+                dbname= os.getenv("DB_NAME"),
+                user= os.getenv("DB_USER"),
+                password= os.getenv("DB_PASSWORD"),
+                port= os.getenv("DB_PORT")
             )
         
         current_app.logger.info(f"Vanna query: {data['query']}")
