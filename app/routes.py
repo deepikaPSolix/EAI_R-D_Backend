@@ -228,6 +228,10 @@ def get_db_connection(details: Dict[str, str]):
     conn = open_db_connection()
     current_app.logger.info("Connected!")
     return conn, 200
+
+@main.route('/dbconnect/details', methods=["GET"])
+def get_db_connection_details():
+    return jsonify({"host":os.getenv("DB_HOST"), "dbname":os.getenv("DB_NAME"), "user":os.getenv("DB_USER")}), 200
     
 @main.route('/vanna/dbconnect', methods=["POST"])
 def vanna_db_connect():
