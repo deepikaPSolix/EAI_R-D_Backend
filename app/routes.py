@@ -21,6 +21,7 @@ import asyncio
 import re
 from app.dashboard import Dashboard
 import nest_asyncio
+import pandas as pd
 
 from app.hpostgres import store_in_postgres
 
@@ -209,6 +210,102 @@ def train_vanna_ddl():
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     
+def create_ddl_from_csv(filename, df, vn):
+    # Use file name as tabel name
+    table_name = filename
+
+    # Find data types
+    sys_prompt =  (
+        """ You are a senior data analyst. Given the column names and a small sample of table data, analyze the structure and actual data patterns to infer relationships, constraints, and meaning.
+            For each column, output the column in quotes followed by the infered data type and parameters as they would be written in a postgresql CREATE TABLE SQL statement. Make sure they are comma separated.
+            Infer logical joins, even if not defined in the DDL."""
+    )
+
+    messages = [
+        vn.system_message(sys_prompt),
+        vn.user_message(df.head(10).to_json())
+    ]
+    print(f"Context Sending to LLM: {messages}")
+    generated_doc = vn.submit_prompt(messages)
+    sql = vn.extract_sql(generated_doc)
+
+    # Build the DDL statement
+    ddl = f"CREATE TABLE {table_name} (\n    {sql}\n);"
+    return ddl
+
+def create_metadata_from_csv_ddl(ddl_statements, df, vn):
+    context_md = ddl_statements + "\n" + df.head(10).to_json()
+    sys_prompt =  (
+        """ You are a senior data  analyst. Given the SQL DDL and a small sample of table data, analyze the structure and actual data patterns to infer relationships, constraints, and meaning.
+            For each table, output metadata in Markdown starting with: Table: <table_name>
+            Then generate a 5-column table with headers:
+            | Column Name | Data Type | Constraints | Default/Foreign Key | Description |
+            Identify inferred primary keys, foreign keys, and unique columns based on value patterns.
+            Leave “—” for blanks.
+            Give clear descriptions of what each column represents based on data content.
+            Infer logical joins, even if not defined in the DDL.
+            Do not output SQL or narrative—only the structured metadata per table."""
+    )
+
+    messages = [
+        vn.system_message(sys_prompt),
+        vn.user_message(context_md)
+    ]
+    print(f"Context Sending to LLM: {messages}")
+    
+    generated_doc = vn.submit_prompt(messages)
+
+    return generated_doc
+
+@main.route('/vanna/train/rawdata', methods=["POST"])
+def train_vanna_raw():
+    try:
+        if 'files[]' not in request.files:
+            return jsonify({"error": "No files provided"})
+        
+        files = request.files.getlist('files[]')
+        vn = MyVanna()
+        res = []
+        
+
+        for file in files:
+            if file.filename == '':
+                return jsonify({"error": "Empty filename"})
+
+            # Save each file to the upload folder
+            file_path = os.path.join(current_app.config['SQL_UPLOAD_DIR_PATH'], file.filename)
+            file.save(file_path)
+
+            # Get DDLs and Metadata
+            try:
+                df = pd.read_excel(file_path)
+            except ValueError as e:
+                try:
+                    df = pd.read_csv(file_path)
+                except ValueError as e:
+                    raise ValueError
+                
+            ddls = create_ddl_from_csv(file.filename, df, vn)
+            metadata_doc = create_metadata_from_csv_ddl(ddls, df, vn)
+
+            ddl_statements = re.findall(r'CREATE TABLE.*?\);', ddls, re.DOTALL | re.IGNORECASE)
+            
+            for ddl in ddl_statements:
+                db_id = vn.train(ddl=ddl)
+                res.append(db_id)
+                vn.add_document(db_id=db_id, doc_id=file.filename)
+            current_app.logger.info(f"✅ Added {str(len(ddl_statements))} DDL to vanna chroma")
+
+            doc_res = vn.train(documentation=metadata_doc)
+            res.append(doc_res)
+            vn.add_document(db_id=doc_res, doc_id=file.filename)
+            current_app.logger.info(f"✅ Added documentation to vanna chroma:\n{doc_res}\n")
+
+        return jsonify({"ids": res}), 202
+    except Exception as e:
+        current_app.logger.error(str(e))
+        return jsonify({"error": f"Internal Server Error at train_vanna_raw(): {str(e)}"}), 500
+
 @main.route('/dbconnect', methods=["POST"])
 def store_db_details(details: Dict[str, str]):
     """
@@ -222,12 +319,26 @@ def store_db_details(details: Dict[str, str]):
     
     return jsonify({"message": "Database connection details stored successfully"}), 200
 
+
 @main.route('/dbconnect', methods=["GET"])
 def get_db_connection(details: Dict[str, str]):
     
     conn = open_db_connection()
     current_app.logger.info("Connected!")
     return conn, 200
+
+@main.route('/dbconnect', methods=["DELETE"])
+def delete_db_details():
+    """
+    Delete database connection details in env.
+    """
+    if os.getenv("DB_HOST"): del os.environ["DB_HOST"]
+    if os.getenv("DB_PORT"): del os.environ["DB_PORT"]
+    if os.getenv("DB_NAME"): del os.environ["DB_NAME"]
+    if os.getenv("DB_USER"): del os.environ["DB_USER"]
+    if os.getenv("DB_PASSWORD"): del os.environ["DB_PASSWORD"]
+    
+    return jsonify({"message": "Database connection details deleted successfully"}), 200
 
 @main.route('/dbconnect/details', methods=["GET"])
 def get_db_connection_details():
@@ -322,7 +433,7 @@ def query_vanna(data=None):
         if data is None:
             raise ValueError("Missing data in the request body")
         vn = MyVanna()
-        if (os.getenv("DB_HOST") and os.getenv("DB_NAME") and os.getenv("DB_USER") and os.getenv("DB_PASSWORD") and os.getenv("DB_PORT")):
+        try:
             vn.connect_to_postgres(
                 host= os.getenv("DB_HOST"),
                 dbname= os.getenv("DB_NAME"),
@@ -330,6 +441,8 @@ def query_vanna(data=None):
                 password= os.getenv("DB_PASSWORD"),
                 port= os.getenv("DB_PORT")
             )
+        except Exception as e:
+            current_app.logger.error(f"Vanna connection failed")
         
         current_app.logger.info(f"Vanna query: {data['query']}")
         sql, df, fig = vn.ask(
