@@ -22,6 +22,7 @@ import re
 from app.dashboard import Dashboard
 import nest_asyncio
 import pandas as pd
+import vanna
 
 from app.hpostgres import store_in_postgres
 
@@ -231,6 +232,7 @@ def create_ddl_from_csv(filename, df, vn):
 
     # Build the DDL statement
     ddl = f"CREATE TABLE {table_name} (\n    {sql}\n);"
+    current_app.logger.info(f"Generated DDL from {filename} CSV:\n {ddl}")
     return ddl
 
 def create_metadata_from_csv_ddl(ddl_statements, df, vn):
@@ -427,6 +429,7 @@ def get_vanna_doc_from_db_id(id):
 
 @main.route('/rag2/query/vanna', methods=["POST"])
 def query_vanna(data=None):
+    result_reason = f"No results found for query"
     try:
         if data is None:
             data = request.get_json()
@@ -443,22 +446,50 @@ def query_vanna(data=None):
             )
         except Exception as e:
             current_app.logger.error(f"Vanna connection failed")
+            result_reason = f"Connect to database to run query"
         
-        current_app.logger.info(f"Vanna query: {data['query']}")
+        vanna_query = data['query']
+        current_app.logger.info(f"Vanna query: {vanna_query}")
         sql, df, fig = vn.ask(
-                question=data["query"],
+                question=vanna_query,
                 print_results=False,
                 auto_train=False,
                 visualize=True,
                 allow_llm_to_see_data=True
             )
         
+        counter = 0
+        while (type(df) == Exception or type(df) == vanna.exceptions.ValidationError) and counter < 2:
+            current_app.logger.info("Vanna run_sql error occurred:", df)
+            current_app.logger.info(f"Vanna run_sql query attempt {counter + 1}:")
+            # ✅ Ask Vanna.AI a question
+            sql, df, fig = vn.ask(
+                question=vanna_query,
+                print_results=False,
+                auto_train=False,
+                visualize=True,
+                allow_llm_to_see_data=True
+            )
+
+            if type(df) == Exception or type(df) == vanna.exceptions.ValidationError:
+                vanna_query += f"\n Attempted query: {sql} Result: {df}"
+                counter += 1
+        
         current_app.logger.info(f"SQL Query: {sql}")
-        if df is not None:
-            current_app.logger.info(f"DataFrame shape: {df.shape}")
-        else:
+
+        if type(df) == Exception or type(df) == vanna.exceptions.ValidationError: # error
+            df_result = None
+            result_reason = f"SQL error: {df}"
+        elif df is None: # no data result
             current_app.logger.info("DataFrame is None, no data returned from Vanna.")
-        return jsonify({"response": sql, "query_result": df.head().to_json(orient='records') if df is not None else None, "fig": fig.to_json() if fig is not None else None}), 200
+            df_result = None
+        else: # success
+            current_app.logger.info(type(df))
+            current_app.logger.info(f"DataFrame shape: {df.shape}")
+            df_result = df.head().to_json(orient='split')
+            result_reason = None
+
+        return jsonify({"response": sql, "query_result": df_result, "result_reason": result_reason, "fig": fig.to_json() if fig is not None else None}), 200
     except Exception as e:
         current_app.logger.error(str(e), exc_info=True)
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
