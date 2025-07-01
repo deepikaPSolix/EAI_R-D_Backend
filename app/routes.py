@@ -58,15 +58,19 @@ def home():
 @main.route("/trials", methods=["GET"])
 def trials_and_analyze_inline():
     # 1) grab query params
-    condition = request.args.get("condition")
+    condition = request.args.get("condition","")
     if not condition:
         return jsonify({"error": "Missing required parameter: condition"}), 400
     phase = request.args.get("phase")
+    interventions   = request.args.get("interventions")         
+    status          = request.args.get("status")                
+    study_type      = request.args.get("study_type")
+    nct_ids         = request.args.get("nct_ids")
     size  = request.args.get("size", default=10, type=int)
 
     try:
         # 2) fetch your trials
-        trials = get_trials_sync(condition, phase, size)
+        trials = get_trials_sync(condition, phase, interventions, status, study_type, nct_ids,size)
         # serialize for the prompt
         trials_json = json.dumps(trials, ensure_ascii=False)
 
