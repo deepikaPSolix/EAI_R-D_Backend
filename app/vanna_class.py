@@ -101,15 +101,20 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
 
         initial_prompt += (
              "===Response Guidelines \n"
-            "1. If the provided context is sufficient, please generate a valid SQL query without any explanations for the question. \n"
-            "2. If the provided context is almost sufficient but requires knowledge of a specific string in a particular column, please generate an intermediate SQL query to find the distinct strings in that column. Prepend the query with a comment saying intermediate_sql \n"
-            "3. If the provided context is insufficient, based on your knowlwdge choose the columns that makes more sense closely related to columns that tou have asked for. \n"
+             """1. You MUST reference ONLY tables / columns that exist in the supplied DDL / metadata.
+                    • For each requested attribute, find an exact or clear-synonym column name.
+                    • If no match exists, you MUST NOT invent a name.
+                        - Instead, either:
+                        a) produce an `intermediate_sql` query to discover the correct column,  OR
+                        b) return `NULL AS "<Friendly-Name>"  -- UNMAPPED`.
+                    • Violating this rule is considered an error; regenerate until compliant.\n"""
+            "2. If the provided context is sufficient, please generate a valid SQL query without any explanations for the question. \n"
+            "3. If the provided context is almost sufficient but requires knowledge of a specific string in a particular column, please generate an intermediate SQL query to find the distinct strings in that column. Prepend the query with a comment saying intermediate_sql \n"
             "4. Please use the most relevant table(s). \n"
             "5. If the question has been asked and answered before, please repeat the answer exactly as it was given before. \n"
             "6. If you do not see any primary and foreign key relationships(joins) in the DDL, Take the same column names as joins and gemerate the sql queries. \n"
             f"7. Ensure that the output SQL is {self.dialect}-compliant and executable, and free of syntax errors. \n"
             "8. For any string comparison in a WHERE clause, wrap both the column and the literal in LOWER() (or UPPER()) to make the match case-insensitive. \n"
-            "9. Use ONLY the tables, columns, and values that exist in the provided schema context. Do not use columns or values that do not exist in the context. \n"\
         )
 
         message_log = [self.system_message(initial_prompt)]
@@ -137,32 +142,55 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
         if samples is None:
             return None
         context_md = self.build_metadata(ddl_list, samples)
-        current_app.logger.info(f"Making LLM call to generate metadata from DDL and sample rows")
-        sys_prompt =  (
-                        """ You are a senior data  analyst. Given the SQL DDL and a small sample of table data, analyze the structure and actual data patterns to infer relationships, constraints, and meaning.
-                            For each table, output metadata in Markdown starting with: Table: <table_name>
-                            Then generate a 5-column table with headers:
-                            | Column Name | Data Type | Constraints | Default/Foreign Key | Description |
-                            Identify inferred primary keys, foreign keys, and unique columns based on value patterns.
-                            Leave “—” for blanks.
-                            Give clear descriptions of what each column represents based on data content.
-                            Infer logical joins, even if not defined in the DDL.
-                            Do not output SQL or narrative—only the structured metadata per table."""
-                    )
 
-        messages = [
-            self.system_message(sys_prompt),
-            self.user_message(context_md)
-        ]
-        current_app.logger.info(f"Context Sending to LLM: {messages}")
-        generated_doc = self.chat_completion(messages)["content"]
-        current_app.logger.info(f"LLM returned metadata: {generated_doc}")
+        table_docs: list[str] = []
+
+        current_app.logger.info(f"Making LLM call to generate metadata from DDL and sample rows")
+
+        for table, meta in samples.items():
+            context_md = self.build_metadata(ddl_list, {table: meta})
+            sys_prompt =  (
+                            """ You are a senior data  analyst. Given the SQL DDL and a small sample of table data, analyze the structure and actual data patterns to infer relationships, constraints, and meaning.
+                                For each table, output metadata in Markdown starting with: Table: <table_name>
+                                Then generate a 5-column table with headers:
+                                | Column Name | Data Type | Constraints | Default/Foreign Key | Description |
+                                Identify inferred primary keys, foreign keys, and unique columns based on value patterns.
+                                Leave “—” for blanks.
+                                Give clear descriptions of what each column represents based on data content.
+                                Infer logical joins, even if not defined in the DDL.
+                                Do not output SQL or narrative—only the structured metadata per table."""
+                        )
+
+            messages = [
+                self.system_message(sys_prompt),
+                self.user_message(context_md)
+            ]
+            current_app.logger.info(f"Context Sending to LLM: {messages}")
+            doc_text = self.chat_completion(messages)["content"]
+            table_docs.append(doc_text)
+
+        generated_doc = "\n\n".join(table_docs)
+        current_app.logger.info(f"Generated metadata document: {generated_doc}")
 
         db_id = self.train(documentation=generated_doc)
         current_app.logger.info(f"Generated metadata document is added to vanna chroma: {db_id}")
-
-
         self.add_document(db_id=db_id, doc_id=db_id)
+
+        #  3. cache locally with the SAME id as filename ───────────────────────
+        cache_dir = os.path.join(os.getcwd(), "cache", "metadata")   # ./cache/metadata
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # Chroma’s id is usually a UUID; replace any characters that are
+        # unsafe for filenames just in case.
+        safe_id = re.sub(r"[^\w\-]", "_", db_id)                     # keep A-Z a-z 0-9 _ -
+        cache_path = os.path.join(cache_dir, f"{safe_id}.md")        # e.g. 7d6c2….md
+
+        with open(cache_path, "w", encoding="utf-8") as f:
+            f.write(generated_doc)
+
+        current_app.logger.info(f"Wrote combined metadata to {cache_path}")
+
+
         return db_id
 
     
@@ -201,7 +229,10 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
             else:
                 parts.append("*no rows*")
         return "\n".join(parts)
-    
+
+
+
+
     def ask(
         self,
         question: Union[str, None] = None,
@@ -317,104 +348,3 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # def extract_sample_data_from_db():
-    #     conn = get_db_connection()  # Your existing function
-    #     cursor = conn.cursor()
-        
-    #     cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema='public'")
-    #     tables = cursor.fetchall()
-        
-    #     table_samples = {}
-    #     for table in tables:
-    #         table_name = table[0]
-    #         cursor.execute(f"SELECT * FROM {table_name} LIMIT 3")
-    #         rows = cursor.fetchall()
-    #         columns = [desc[0] for desc in cursor.description]
-    #         table_samples[table_name] = {
-    #             "columns": columns,
-    #             "rows": rows
-    #         }
-
-    #     cursor.close()
-    #     conn.close()
-    #     return table_samples
-    
-    # def build_metadata_prompt(self, ddl_list: list[str], samples: dict[str, dict]) -> str:
-     
-    #     pieces = [
-    #         "# Auto-generated fallback documentation",
-    #         "Below are the DDL statements followed by a few sample rows "
-    #         "for each table. Use them to understand the schema."
-    #     ]
-
-    #     # DDL first
-    #     pieces.append("## DDL")
-    #     pieces.extend([f"```sql\n{ddl.strip()}\n```" for ddl in ddl_list])
-
-    #     # Then per-table sample rows
-    #     for tbl, data in samples.items():
-    #         pieces.append(f"\n## {tbl}")
-    #         pieces.append("Columns: " + ", ".join(data["columns"]))
-
-    #         if data["rows"]:
-    #             pieces.append("Sample rows:")
-    #             for r in data["rows"]:
-    #                 pieces.append("  - " + ", ".join(map(str, r)))
-    #         else:
-    #             pieces.append("*(no rows in table)*")
-
-    #     return "\n".join(pieces)
-    
-    # def train_with_fallback_doc(self, ddl_list: list[str] = None) -> str:
-    #     """
-    #     1) Pull live samples
-    #     2) Combine with any DDL you pass in (or empty list)
-    #     3) train() → add_document() → return db_id
-    #     """
-    #     ddl_list = ddl_list or []
-
-    #     samples = self.extract_sample_data_from_db()
-    #     full_doc = self.build_metadata_prompt(ddl_list, samples)
-
-    #     db_id = self.train(documentation=full_doc)
-    #     self.add_document(db_id=db_id, doc_id="__auto_generated_fallback__")
-    #     return db_id
