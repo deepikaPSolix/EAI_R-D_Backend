@@ -33,6 +33,10 @@ import subprocess
 import psycopg2
 from docx import Document
 from app.vanna_class import MyVanna
+from app.test import get_trials_sync 
+from app.llm_model import LLMModel
+from langchain.schema import SystemMessage, HumanMessage
+from langchain_openai import ChatOpenAI
 
 doc_updates = 0
 main = Blueprint('main', __name__)
@@ -61,6 +65,65 @@ def serve_file(filename):
         return send_from_directory(current_app.config['UPLOAD_DIR_PATH'], filename)
     except Exception as e:
         return jsonify({"error": str(e)},exc_info=True), 500
+    
+
+@main.route("/trials", methods=["GET"])
+def trials_and_analyze_inline():
+    # 1) grab query params
+    condition = request.args.get("condition")
+    if not condition:
+        return jsonify({"error": "Missing required parameter: condition"}), 400
+    phase = request.args.get("phase")
+    size  = request.args.get("size", default=10, type=int)
+
+    try:
+        # 2) fetch your trials
+        trials = get_trials_sync(condition, phase, size)
+        # serialize for the prompt
+        trials_json = json.dumps(trials, ensure_ascii=False)
+
+        # 3) spin up an OpenAI chat model
+        chat = ChatOpenAI(
+            temperature=0.1,
+            model="gpt-4o-mini",
+            openai_api_key=os.getenv("OPENAI_API_KEY")
+        )
+
+        # 4) build messages: system + user
+        messages = [
+            SystemMessage(content="You are a clinical-trials research assistant."),
+            HumanMessage(
+                content=(
+                    "Here is a JSON array of trial records:\n\n"
+                    f"{trials_json}\n\n"
+                    "Please output EXACTLY a JSON object with two keys:\n"
+                    "  1) \"summary\": less than or equal to 10-sentence overview of what these trials study\n"
+                    "  2) \"top_ids\": an array of the 3 NCT IDs you judge most promising\n\n"
+                    "Do NOT output any extra text or markdown."
+                )
+            )
+        ]
+
+        # 5) call the model
+        result = chat(messages)
+        text = result.content.strip()
+
+        # 6) parse the model’s JSON (fall back to raw text on failure)
+        try:
+            analysis = json.loads(text)
+        except json.JSONDecodeError:
+            current_app.logger.error("Failed to parse JSON from LLM:", exc_info=True)
+            analysis = {"error_parsing_llm_output": text}
+
+    except Exception as e:
+        current_app.logger.error(f"Error in trial lookup or LLM call: {e}", exc_info=True)
+        return jsonify({"error": "Internal error fetching or analyzing trials"}), 500
+
+    # 7) return both raw and analyzed
+    return jsonify({
+        "trials": trials,
+        "analysis": analysis
+    }), 200
 
 
 @main.route("/docs/uploadandtrain", methods=['POST'])
