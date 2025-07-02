@@ -145,7 +145,7 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
 
         table_docs: list[str] = []
 
-        current_app.logger.info(f"Making LLM call to generate metadata from DDL and sample rows")
+        current_app.logger.info(f"Making LLM call to generate metadata from DDL and sample rows: {len(samples)} ",)
 
         for table, meta in samples.items():
             context_md = self.build_metadata(ddl_list, {table: meta})
@@ -165,7 +165,6 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
                 self.system_message(sys_prompt),
                 self.user_message(context_md)
             ]
-            current_app.logger.info(f"Context Sending to LLM: {messages}")
             doc_text = self.chat_completion(messages)["content"]
             table_docs.append(doc_text)
 
@@ -175,21 +174,6 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
         db_id = self.train(documentation=generated_doc)
         current_app.logger.info(f"Generated metadata document is added to vanna chroma: {db_id}")
         self.add_document(db_id=db_id, doc_id=db_id)
-
-        #  3. cache locally with the SAME id as filename ───────────────────────
-        cache_dir = os.path.join(os.getcwd(), "cache", "metadata")   # ./cache/metadata
-        os.makedirs(cache_dir, exist_ok=True)
-
-        # Chroma’s id is usually a UUID; replace any characters that are
-        # unsafe for filenames just in case.
-        safe_id = re.sub(r"[^\w\-]", "_", db_id)                     # keep A-Z a-z 0-9 _ -
-        cache_path = os.path.join(cache_dir, f"{safe_id}.md")        # e.g. 7d6c2….md
-
-        with open(cache_path, "w", encoding="utf-8") as f:
-            f.write(generated_doc)
-
-        current_app.logger.info(f"Wrote combined metadata to {cache_path}")
-
 
         return db_id
 
