@@ -359,14 +359,6 @@ def vanna_db_connect():
     db_user = data.get("DBUserName")
     db_password = data.get("DBPassword")
 
-    store_db_details({
-        "DBHostName": db_host,
-        "DBPort": db_port,
-        "DBName": db_name,
-        "DBUserName": db_user,
-        "DBPassword": db_password
-    })
-
     # Establish a database connection
     current_app.logger.info(f"Attempting DB connection to {db_host}:{db_port}/{db_name} as {db_user}")
 
@@ -383,8 +375,15 @@ def vanna_db_connect():
         current_app.logger.error(f"DB connection failed: {str(e)}")
         return jsonify({"success": False, "message": f"Failed to connect to database: {str(e)}"})
 
-    # Simulate a successful connection
+    # A successful connection
     current_app.logger.info(f"DB connection successful")
+    store_db_details({
+        "DBHostName": db_host,
+        "DBPort": db_port,
+        "DBName": db_name,
+        "DBUserName": db_user,
+        "DBPassword": db_password
+    })
     return jsonify({"success": True, "message": "Connected to database successfully"}), 200
 
 @main.route('/docs/vanna', methods=["DELETE"])
