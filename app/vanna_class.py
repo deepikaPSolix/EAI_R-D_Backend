@@ -110,6 +110,7 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
             f"7. Ensure that the output SQL is {self.dialect}-compliant and executable, and free of syntax errors. \n"
             "8. For any string comparison in a WHERE clause, wrap both the column and the literal in LOWER() (or UPPER()) to make the match case-insensitive. \n"
             "9. Use ONLY the tables, columns, and values that exist in the provided schema context. Do not use columns or values that do not exist in the context. \n"\
+            "10. Make sure all rows are distinct and there are no duplicates. \n"
         )
 
         message_log = [self.system_message(initial_prompt)]
