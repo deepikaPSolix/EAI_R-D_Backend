@@ -145,6 +145,16 @@ def classify():
 
     return jsonify({"labels": labels.to_json(orient='records')}), 201
 
+@main.route('/vanna/train/generatedoc', methods=["POST"])
+def train_vanna_generate_doc():
+    try:
+        vn = MyVanna()
+        db_id = vn.train_with_fallback_doc()
+        return jsonify({"id": db_id, "status": "trained with generated metadata"}), 202
+    except Exception as e:
+        current_app.logger.error(str(e))
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+
 @main.route('/vanna/train/doc', methods=["POST"])
 def train_vanna_doc():
     try:
@@ -153,10 +163,10 @@ def train_vanna_doc():
         vn = MyVanna()
 
         files = request.files.getlist('files[]')
+        
         #  If no valid doc uploaded, call fallback
         if not files or all(f.filename.strip() == '' for f in files):
-            db_id = vn.train_with_fallback_doc()
-            return jsonify({"id": db_id, "status": "trained with generated metadata"}), 202
+            return jsonify({"error": "No files"})
 
         for file in files:
             if file.filename == '':
