@@ -21,6 +21,12 @@ import asyncio
 import re
 from app.dashboard import Dashboard
 import nest_asyncio
+# import uvloop
+# uvloop.install()
+from app.test import get_trials_sync
+from app.llm_model import LLMModel
+from langchain.schema import SystemMessage, HumanMessage
+from langchain_openai import ChatOpenAI
 import pandas as pd
 import vanna
 
@@ -57,32 +63,22 @@ def home():
     return "<p> Welcome to EAI Application solix docker test!!!</p>"
 
 
-@main.route('/filecontents/<filename>', methods=["GET"])
-def serve_file(filename):
-    print("Hi")
-    print(filename)
-    if not filename:
-        print("Filename is required")
-        return jsonify({"error": "Filename is required"}), 400
-
-    try:
-        return send_from_directory(current_app.config['UPLOAD_DIR_PATH'], filename)
-    except Exception as e:
-        return jsonify({"error": str(e)},exc_info=True), 500
-    
-
 @main.route("/trials", methods=["GET"])
 def trials_and_analyze_inline():
     # 1) grab query params
-    condition = request.args.get("condition")
+    condition = request.args.get("condition","")
     if not condition:
         return jsonify({"error": "Missing required parameter: condition"}), 400
     phase = request.args.get("phase")
+    interventions   = request.args.get("interventions")         
+    status          = request.args.get("status")                
+    study_type      = request.args.get("study_type")
+    nct_ids         = request.args.get("nct_ids")
     size  = request.args.get("size", default=10, type=int)
 
     try:
         # 2) fetch your trials
-        trials = get_trials_sync(condition, phase, size)
+        trials = get_trials_sync(condition, phase, interventions, status, study_type, nct_ids,size)
         # serialize for the prompt
         trials_json = json.dumps(trials, ensure_ascii=False)
 
@@ -128,6 +124,21 @@ def trials_and_analyze_inline():
         "trials": trials,
         "analysis": analysis
     }), 200
+
+
+@main.route('/filecontents/<filename>', methods=["GET"])
+def serve_file(filename):
+    print("Hi")
+    print(filename)
+    if not filename:
+        print("Filename is required")
+        return jsonify({"error": "Filename is required"}), 400
+
+    try:
+        return send_from_directory(current_app.config['UPLOAD_DIR_PATH'], filename)
+    except Exception as e:
+        return jsonify({"error": str(e)},exc_info=True), 500
+    
 
 
 @main.route("/docs/uploadandtrain", methods=['POST'])
