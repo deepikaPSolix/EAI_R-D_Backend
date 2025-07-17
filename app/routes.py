@@ -532,7 +532,7 @@ def query_vanna(data=None):
         
         counter = 0
         while (type(df) == Exception or type(df) == vanna.exceptions.ValidationError) and counter < 2:
-            current_app.logger.info("Vanna run_sql error occurred:", df)
+            current_app.logger.info("Vanna run_sql error occurred: " + str(df))
             current_app.logger.info(f"Vanna run_sql query attempt {counter + 1}:")
             # ✅ Ask Vanna.AI a question
             sql, df, fig = vn.ask(
