@@ -508,6 +508,8 @@ def query_vanna(data=None):
         if data is None:
             raise ValueError("Missing data in the request body")
         vn = MyVanna()
+
+        # Connect to the database
         try:
             vn.connect_to_postgres(
                 host= os.getenv("DB_HOST"),
@@ -520,7 +522,29 @@ def query_vanna(data=None):
             current_app.logger.error(f"Vanna connection failed")
             result_reason = f"Connect to database to run query"
         
+        # Get driving table if exists
         vanna_query = data['query']
+        current_app.logger.info(os.getenv("DRIVING_TABLE"))
+        if os.getenv("DRIVING_TABLE"):
+            try:
+                driving_table = vn.ddl_collection.get(
+                    where_document=
+                    {
+                        "$or": [
+                            {"$contains": "create table " + str(os.getenv("DRIVING_TABLE")).lower()},
+                            {"$contains": "create table " + str(os.getenv("DRIVING_TABLE")).upper()},
+                            {"$contains": "CREATE TABLE " + str(os.getenv("DRIVING_TABLE")).lower()},
+                            {"$contains": "CREATE TABLE " + str(os.getenv("DRIVING_TABLE")).upper()},
+                        ]
+                    },
+                    limit=3
+                )["documents"]
+                current_app.logger.info(f"Driving table found: {driving_table}")
+                vanna_query += "\n" + str(driving_table) + "\n"
+            except Exception as e:
+                current_app.logger.error(f"Error occurred while fetching driving table: {str(e)}")
+
+        # Run the Vanna query
         current_app.logger.info(f"Vanna query: {vanna_query}")
         sql, df, fig = vn.ask(
                 question=vanna_query,
@@ -530,11 +554,11 @@ def query_vanna(data=None):
                 allow_llm_to_see_data=True
             )
         
+        # Iterate until a valid DataFrame is returned or max attempts reached
         counter = 0
         while (type(df) == Exception or type(df) == vanna.exceptions.ValidationError) and counter < 2:
             current_app.logger.info("Vanna run_sql error occurred: " + str(df))
             current_app.logger.info(f"Vanna run_sql query attempt {counter + 1}:")
-            # ✅ Ask Vanna.AI a question
             sql, df, fig = vn.ask(
                 question=vanna_query,
                 print_results=False,
@@ -549,6 +573,7 @@ def query_vanna(data=None):
         
         current_app.logger.info(f"SQL Query: {sql}")
 
+        # Handle the result
         if type(df) == Exception or type(df) == vanna.exceptions.ValidationError: # error
             df_result = None
             result_reason = f"SQL error: {df}"
@@ -1097,3 +1122,30 @@ def get_cluster_labels(graph_id):
     except Exception as e:
         current_app.logger.error(f"Error fetching labels: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+@main.route("/setenv", methods=["POST"])
+def set_env(key=None, value=None):
+    try:
+        if not key or not value:
+            data = request.get_json()
+            key = data.get("key")
+            value = data.get("value")
+        os.environ[key] = value
+    except Exception as e:
+        current_app.logger.error(f"Error setting environment variable: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Failed to set environment variable: {str(e)}"}), 500
+    current_app.logger.info(f"Environment variable {key} set to {value}")
+    return jsonify({"message": f"Environment variable {key} set to {value}"}), 200
+
+@main.route("/setenv", methods=["DELETE"])
+def delete_env(key=None):
+    try:
+        if not key:    
+            data = request.get_json()
+            key = data.get("key")
+        del os.environ[key]
+    except Exception as e:
+        current_app.logger.error(f"Error deleting environment variable: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Failed to delete environment variable: {str(e)}"}), 500
+    current_app.logger.info(f"Environment variable {key} deleted")
+    return jsonify({"message": f"Environment variable {key} deleted"}), 200
