@@ -147,20 +147,21 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
 
         table_docs: list[str] = []
 
-        current_app.logger.info(f"Making LLM call to generate metadata from DDL and sample rows: {len(samples)} ",)
+        current_app.logger.info(f"Making LLM call to generate metadata from DDL and sample Tables: {len(samples)} ",)
 
         for table, meta in samples.items():
             context_md = self.build_metadata(ddl_list, {table: meta})
             sys_prompt =  (
-                            """ You are a senior data  analyst. Given the SQL DDL and a small sample of table data, analyze the structure and actual data patterns to infer relationships, constraints, and meaning.
-                                For each table, output metadata in Markdown starting with: Table: <table_name>
+                            """ You are a senior data  analyst. Given the SQL DDL and a small sample of table data, analyze the structure and content to extract standardized fro each column,
+                              output metadata in Markdown starting with: Table: <table_name>
                                 Then generate a 5-column table with headers:
-                                | Column Name | Data Type | Constraints | Default/Foreign Key | Description |
-                                Identify inferred primary keys, foreign keys, and unique columns based on value patterns.
-                                Leave “—” for blanks.
-                                Give clear descriptions of what each column represents based on data content.
-                                Infer logical joins, even if not defined in the DDL.
-                                Do not output SQL or narrative—only the structured metadata per table."""
+                                | Column Name | Data Type | Column Alias Name | Description |
+                                 Populate the table as follows
+                                 Column Name: The column name as defined in the table.
+                                 Data Type: As defined in the DDL.
+                                 Column Alias Name: Inferred standardized name for use in relationship analysis across tables. Use actual data patterns and naming similarities to assign meaningful, consistent aliases (e.g., user_id, created_at, product_code).
+                                 Description: A concise explanation of the column's meaning, based on the column name and actual sample data.
+                                 Use — if any information is missing or cannot be inferred from the available data.."""
                         )
 
             messages = [
@@ -180,7 +181,7 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
         return db_id
 
     
-    def _extract_sample_data_from_db(self, limit: int = 3) -> dict:
+    def _extract_sample_data_from_db(self, limit: int = 50) -> dict:
         try:
             conn = open_db_connection()
             cur  = conn.cursor() 
@@ -190,12 +191,15 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
             cur = conn.cursor()
             cur.execute(""" SELECT table_name FROM   information_schema.tables WHERE  table_schema = 'public'; """)
             samples = {}
-            for (table,) in cur.fetchall():
+            table_names = cur.fetchall()
+
+            for (table,) in table_names:
                 cur.execute(f"SELECT * FROM {table} LIMIT {limit}")
                 rows = cur.fetchall()
                 cols = [c.name for c in cur.description]
                 samples[table] = {"columns": cols, "rows": rows}
-            cur.close(); conn.close()
+            cur.close()
+            conn.close()
         except Exception as e:
             current_app.logger.error("Failed to connect to the database")
             return None
@@ -216,7 +220,7 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
                 parts.append("*no rows*")
         return "\n".join(parts)
 
-
+ # ------------------------------- END pre-processing metadadata -------------------------------
 
 
     def ask(
