@@ -18,7 +18,7 @@ import ast
 from collections import Counter
 from urllib.parse import urlparse
 from pyvis.network import Network
-from app.crew_cluster_labeler import generate_cluster_label  # the function you wrote
+from app.crew_cluster_labeler import generate_unique_label
 
 dns_host = os.getenv("DNS_HOST")
 dns_dbname = os.getenv("DNS_DBNAME")
@@ -232,6 +232,7 @@ class GraphFiles():
             return f"{len(filenames)} Uploaded Files"
     def render_graph_html(self, G_nx, min_cluster_size, MAX_LABEL_NODES, threshold):
         clusters = defaultdict(list)
+        existing_labels = set()
         for node, data in G_nx.nodes(data=True):
             cluster = data.get("cluster", -1)
             clusters[cluster].append(node)
@@ -279,8 +280,8 @@ class GraphFiles():
         for cluster_id, nodes in clusters.items():
             if cluster_id == -1:
                 continue  
-            cluster_text = "\n".join([get_clean_text(G_nx,node) for node in nodes])
-            label = generate_cluster_label(cluster_text)
+            cluster_text = "\n".join([get_clean_text(G_nx, node) for node in nodes])
+            label = generate_unique_label(cluster_text, cluster_id, existing_labels)
             all_labels[cluster_id] = label
 
         for cluster_id, nodes in filtered_clusters.items():
