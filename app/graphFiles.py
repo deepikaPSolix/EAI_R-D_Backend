@@ -18,6 +18,8 @@ import ast
 from collections import Counter
 from urllib.parse import urlparse
 from pyvis.network import Network
+from app.crew_cluster_labeler import generate_cluster_label  # the function you wrote
+
 dns_host = os.getenv("DNS_HOST")
 dns_dbname = os.getenv("DNS_DBNAME")
 dns_user = os.getenv("DNS_USER")
@@ -278,7 +280,7 @@ class GraphFiles():
             if cluster_id == -1:
                 continue  
             cluster_text = "\n".join([get_clean_text(G_nx,node) for node in nodes])
-            label = self.generate_cluster_label(cluster_text, cluster_id)
+            label = generate_cluster_label(cluster_text)
             all_labels[cluster_id] = label
 
         for cluster_id, nodes in filtered_clusters.items():
@@ -435,71 +437,71 @@ class GraphFiles():
             net.repulsion(node_distance=150, central_gravity=0.3)
             return net.generate_html()
 
-    def generate_cluster_label(self, cluster_text: str, cluster_id: int) -> str:
-        conn = psycopg2.connect(dns)
-        cur = conn.cursor()
+    # def generate_cluster_label(self, cluster_text: str, cluster_id: int) -> str:
+    #     conn = psycopg2.connect(dns)
+    #     cur = conn.cursor()
 
-        try:
-            cur.execute("""
-                SELECT label FROM cluster_labels
-                WHERE graph_id = %s AND cluster_id = %s
-            """, (self.graph_id, cluster_id))
-            row = cur.fetchone()
-            if row and row[0]:
-                label = row[0].strip()
-                current_app.logger.info(f"🟢 Using cached label for cluster {cluster_id}: {label}")
-                return label
+    #     try:
+    #         cur.execute("""
+    #             SELECT label FROM cluster_labels
+    #             WHERE graph_id = %s AND cluster_id = %s
+    #         """, (self.graph_id, cluster_id))
+    #         row = cur.fetchone()
+    #         if row and row[0]:
+    #             label = row[0].strip()
+    #             current_app.logger.info(f"🟢 Using cached label for cluster {cluster_id}: {label}")
+    #             return label
 
-            cur.execute("""
-                SELECT label FROM cluster_labels
-                WHERE graph_id = %s
-            """, (self.graph_id,))
-            existing_labels = [r[0].strip() for r in cur.fetchall() if r[0]]
-            normalized_existing = {label.lower() for label in existing_labels}
+    #         cur.execute("""
+    #             SELECT label FROM cluster_labels
+    #             WHERE graph_id = %s
+    #         """, (self.graph_id,))
+    #         existing_labels = [r[0].strip() for r in cur.fetchall() if r[0]]
+    #         normalized_existing = {label.lower() for label in existing_labels}
 
-            if not cluster_text.strip():
-                label = f"Cluster {cluster_id}"
-                current_app.logger.warning(f"⚠️ Cluster {cluster_id} is empty. Using default label.")
-            else:
-                prompt = f"""
-                        You are an expert language model tasked with labeling semantic clusters in a knowledge graph.
-                        🧠 Cluster #{cluster_id} Content:
-                        {cluster_text.strip()}
-                        🆕 Existing Label:{existing_labels}
-                        Each cluster is a group of related topics or concepts. Your goal is to generate a **clear, concise, and completely Unique Label** (2–3 words max) that best summarizes the main idea of the cluster **without duplicating or imitating any existing labels**.
-                        📌 Existing labels in this graph which are given below:
-                        {chr(10).join(f"- {label}" for label in sorted(existing_labels)) or 'None'}
-                        ❗ VERY IMPORTANT:
-                        - DO NOT use the same words, synonyms, or vague rephrasings of Existing Label.
-                        - Only return the label. Do not include explanations, punctuation, or extra text.
-                            """.strip()
+    #         if not cluster_text.strip():
+    #             label = f"Cluster {cluster_id}"
+    #             current_app.logger.warning(f"⚠️ Cluster {cluster_id} is empty. Using default label.")
+    #         else:
+    #             prompt = f"""
+    #                     You are an expert language model tasked with labeling semantic clusters in a knowledge graph.
+    #                     🧠 Cluster #{cluster_id} Content:
+    #                     {cluster_text.strip()}
+    #                     🆕 Existing Label:{existing_labels}
+    #                     Each cluster is a group of related topics or concepts. Your goal is to generate a **clear, concise, and completely Unique Label** (2–3 words max) that best summarizes the main idea of the cluster **without duplicating or imitating any existing labels**.
+    #                     📌 Existing labels in this graph which are given below:
+    #                     {chr(10).join(f"- {label}" for label in sorted(existing_labels)) or 'None'}
+    #                     ❗ VERY IMPORTANT:
+    #                     - DO NOT use the same words, synonyms, or vague rephrasings of Existing Label.
+    #                     - Only return the label. Do not include explanations, punctuation, or extra text.
+    #                         """.strip()
 
-                response = self.llm.model.invoke(prompt).content.strip()
-                candidate = response or f"Cluster {cluster_id}"
-                normalized = candidate.lower()
+    #             response = self.llm.model.invoke(prompt).content.strip()
+    #             candidate = response or f"Cluster {cluster_id}"
+    #             normalized = candidate.lower()
 
-                if normalized in normalized_existing:
-                    current_app.logger.warning(f"⚠️ LLM returned duplicate label '{candidate}'. Using fallback.")
-                    label = f"Cluster {candidate}"
-                else:
-                    label = candidate
+    #             if normalized in normalized_existing:
+    #                 current_app.logger.warning(f"⚠️ LLM returned duplicate label '{candidate}'. Using fallback.")
+    #                 label = f"Cluster {candidate}"
+    #             else:
+    #                 label = candidate
 
-            cur.execute("""
-                INSERT INTO cluster_labels (graph_id, cluster_id, label)
-                VALUES (%s, %s, %s)
-                ON CONFLICT (graph_id, cluster_id) DO UPDATE SET label = EXCLUDED.label
-            """, (self.graph_id, cluster_id, label))
-            conn.commit()
+    #         cur.execute("""
+    #             INSERT INTO cluster_labels (graph_id, cluster_id, label)
+    #             VALUES (%s, %s, %s)
+    #             ON CONFLICT (graph_id, cluster_id) DO UPDATE SET label = EXCLUDED.label
+    #         """, (self.graph_id, cluster_id, label))
+    #         conn.commit()
 
-        except Exception as e:
-            current_app.logger.error(f"❌ Error in label generation for cluster {cluster_id}: {str(e)}")
-            label = f"Cluster {cluster_id}"
+    #     except Exception as e:
+    #         current_app.logger.error(f"❌ Error in label generation for cluster {cluster_id}: {str(e)}")
+    #         label = f"Cluster {cluster_id}"
 
-        finally:
-            cur.close()
-            conn.close()
+    #     finally:
+    #         cur.close()
+    #         conn.close()
 
-        return label
+    #     return label
 
   
     def query_graph_link_response(self, query: str) -> dict:
