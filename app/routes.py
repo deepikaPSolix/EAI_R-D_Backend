@@ -577,14 +577,17 @@ def query_vanna(data=None):
         if type(df) == Exception or type(df) == vanna.exceptions.ValidationError: # error
             df_result = None
             result_reason = f"SQL error: {df}"
-        elif df is None: # no data result
-            current_app.logger.info("DataFrame is None, no data returned from Vanna.")
+        elif df is None or df.shape[0] == 0: # no data result
+            current_app.logger.info("DataFrame is None or empty, no data returned from Vanna.")
             df_result = None
         else: # success
             current_app.logger.info(type(df))
             current_app.logger.info(f"DataFrame shape: {df.shape}")
             df_result = df.head().to_json(orient='split')
             result_reason = None
+
+        if sql is None or sql == "":
+            sql = "No SQL query generated."
 
         return jsonify({"response": sql, "query_result": df_result, "result_reason": result_reason, "fig": fig.to_json() if fig is not None else None}), 200
     except Exception as e:
