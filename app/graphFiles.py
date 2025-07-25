@@ -282,6 +282,10 @@ class GraphFiles():
                 continue  
             cluster_text = "\n".join([get_clean_text(G_nx, node) for node in nodes])
             label = generate_unique_label(cluster_text, cluster_id, existing_labels)
+            existing_labels.add(label.lower())
+
+    # Store to DB using GraphFiles self.graph_id
+            self.store_cluster_label_to_db(cluster_id, label)
             all_labels[cluster_id] = label
 
         for cluster_id, nodes in filtered_clusters.items():
@@ -315,6 +319,20 @@ class GraphFiles():
 
         # current_app.logger.info(f"✅ Render complete. Cluster labels: {list(all_labels.values())}")
         return net.generate_html()
+    def store_cluster_label_to_db(self, cluster_id: int, label: str):
+        try:
+            import psycopg2
+            conn = psycopg2.connect(dns)
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO cluster_labels (graph_id, cluster_id, label)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (graph_id, cluster_id) DO UPDATE SET label = EXCLUDED.label
+                    """, (self.graph_id, cluster_id, label))
+            current_app.logger.info(f"✅ Label stored: {label} (graph_id={self.graph_id}, cluster_id={cluster_id})")
+        except Exception as e:
+            current_app.logger.error(f"❌ DB label storage failed for cluster {cluster_id}: {e}", exc_info=True)
 
     def add_all_semantic_edges(self, source_graph: nx.Graph, target_graph: nx.Graph, threshold):
         """
