@@ -18,7 +18,7 @@ import ast
 from collections import Counter
 from urllib.parse import urlparse
 from pyvis.network import Network
-from app.crew_cluster_labeler import generate_unique_label
+from app.crew_cluster_labeler import generate_unique_label, batch_generate_cluster_labels
 
 dns_host = os.getenv("DNS_HOST")
 dns_dbname = os.getenv("DNS_DBNAME")
@@ -277,14 +277,21 @@ class GraphFiles():
                     formatted.append(line.strip())
             return "<br>".join(formatted)
 
+        # Parallel label generation for clusters
+        cluster_texts = []
+        cluster_ids = []
         for cluster_id, nodes in clusters.items():
             if cluster_id == -1:
-                continue  
+                continue
             cluster_text = "\n".join([get_clean_text(G_nx, node) for node in nodes])
-            label = generate_unique_label(cluster_text, cluster_id, existing_labels)
+            cluster_texts.append(cluster_text)
+            cluster_ids.append(cluster_id)
+        # Generate all labels in parallel (with improved duplicate handling)
+        labels_dict = batch_generate_cluster_labels(cluster_texts, max_workers=5)
+        all_labels = {}
+        for idx, cluster_id in enumerate(cluster_ids):
+            label = labels_dict.get(idx, f"Cluster {cluster_id}")
             existing_labels.add(label.lower())
-
-    # Store to DB using GraphFiles self.graph_id
             self.store_cluster_label_to_db(cluster_id, label)
             all_labels[cluster_id] = label
 
