@@ -76,14 +76,12 @@ def generate_unique_label(cluster_text: str, cluster_id: int, existing_labels: s
     logger.info(f"Starting label generation for Cluster ID: {cluster_id}")
     max_retries = 1
     final_label = None
-    failed_labels = []  # For feedback loop
     for attempt in range(max_retries + 1):
         # Task 1: Label Generation
         generation_task = Task(
             description=(
                 "You are to generate a label for the following cluster of text notes. "
                 "The label must be exactly 2-4 words, unique among all existing labels, and highly meaningful: it should capture the main semantic theme of the cluster. "
-                "Do NOT repeat any label from the provided list of existing labels. "
                 "Return your answer as a JSON object in the following format: {\"label\": \"...\"}. "
                 "Do not include any other text, explanation, or suggestions. Only return the JSON object.\n"
                 f"Cluster Content:\n{cluster_text}\n"
@@ -104,7 +102,6 @@ def generate_unique_label(cluster_text: str, cluster_id: int, existing_labels: s
             label = parse_label_output(raw_label)
             if not label:
                 logger.error(f"No valid label generated for Cluster ID: {cluster_id}. Attempt {attempt+1}/{max_retries+1}")
-                failed_labels.append((cluster_text, None))
                 cluster_text = cluster_text[len(cluster_text)//2]
                 if attempt == max_retries:
                     return f"Cluster {cluster_id}"
@@ -112,52 +109,15 @@ def generate_unique_label(cluster_text: str, cluster_id: int, existing_labels: s
             generated_label = label
         except Exception as e:
             logger.error(f"❌ Generation failed: {e}", exc_info=True)
-            failed_labels.append((cluster_text, None))
             generated_label = ""
         if not is_valid_label(generated_label):
             logger.warning(f"⚠️ Invalid label format: {generated_label!r}")
-            failed_labels.append((cluster_text, generated_label))
-            # Try Validator agent
-            valid, reason = validate_label(generated_label, cluster_text, existing_labels)
-            if not valid:
-                logger.warning(f"Validator agent rejected label: {generated_label!r}. Reason: {reason}")
-                # Try Refiner agent
-                refined = refine_label(generated_label, cluster_text, existing_labels)
-                if refined:
-                    # Validate refined label and log reason
-                    valid_refined, reason_refined = validate_label(refined, cluster_text, existing_labels)
-                    if not valid_refined:
-                        logger.warning(f"Validator agent rejected refined label: {refined!r}. Reason: {reason_refined}")
-                        failed_labels.append((cluster_text, refined))
-                    if valid_refined and is_valid_label(refined) and refined.lower() not in existing_labels:
-                        final_label = refined
-                        break
             if attempt == max_retries:
                 final_label = f"Cluster {cluster_id}"
                 break
             continue
         if generated_label.lower() in existing_labels:
             logger.warning(f"⚠️ Duplicate label: {generated_label!r}")
-            failed_labels.append((cluster_text, generated_label))
-            if attempt == max_retries:
-                final_label = f"Cluster {cluster_id}"
-                break
-            continue
-        # Validate with Validator agent
-        valid, reason = validate_label(generated_label, cluster_text, existing_labels)
-        if not valid:
-            logger.warning(f"Validator agent rejected label: {generated_label!r}. Reason: {reason}")
-            failed_labels.append((cluster_text, generated_label))
-            # Try Refiner agent
-            refined = refine_label(generated_label, cluster_text, existing_labels)
-            if refined:
-                valid_refined, reason_refined = validate_label(refined, cluster_text, existing_labels)
-                if not valid_refined:
-                    logger.warning(f"Validator agent rejected refined label: {refined!r}. Reason: {reason_refined}")
-                    failed_labels.append((cluster_text, refined))
-                if valid_refined and is_valid_label(refined) and refined.lower() not in existing_labels:
-                    final_label = refined
-                    break
             if attempt == max_retries:
                 final_label = f"Cluster {cluster_id}"
                 break
@@ -167,77 +127,9 @@ def generate_unique_label(cluster_text: str, cluster_id: int, existing_labels: s
     # Save label in session memory
     if final_label:
         existing_labels.add(final_label.lower())
-    # Audit trail: log all failed attempts
-    if failed_labels:
-        for fail_text, fail_label in failed_labels:
-            logger.info(f"Audit trail: Cluster ID {cluster_id}, Failed label: {fail_label!r}, Text length: {len(fail_text)}")
+    # Store the label in the database if graph_id is provided
+    
     return final_label
-
-def validate_label(label, cluster_text, existing_labels):
-    """
-    Use Validator agent to check label validity. Returns (valid, reason).
-    """
-    validation_task = Task(
-        description=(
-            f"Review the following label for a cluster of text notes. "
-            f"Label: {label}\n"
-            f"Cluster Content:\n{cluster_text}\n"
-            f"Existing Labels: {sorted(existing_labels)}\n"
-            "Respond with a JSON object: {\"valid\": true/false, \"reason\": \"...\"} explaining why the label is valid or not."
-        ),
-        expected_output='{"valid": true, "reason": "..."}',
-        agent=validator_agent,
-    )
-    try:
-        crew_val = Crew(
-            agents=[validator_agent],
-            tasks=[validation_task],
-            process=Process.sequential,
-            verbose=True,
-        )
-        raw_val = crew_val.kickoff()
-        # Try to extract valid and reason from JSON
-        match = re.search(r'\{"valid"\s*:\s*(true|false),\s*"reason"\s*:\s*".*?"\}', str(raw_val), re.DOTALL)
-        if match:
-            data = json.loads(match.group(0))
-            return data["valid"], data["reason"]
-        # Fallback: try to extract valid only
-        match = re.search(r'\{"valid"\s*:\s*(true|false)\}', str(raw_val))
-        if match:
-            valid = json.loads(match.group(0))["valid"]
-            return valid, None
-    except Exception as e:
-        logger.error(f"Validator agent failed: {e}")
-    return False, None
-
-def refine_label(label, cluster_text, existing_labels):
-    logger.info(f"Invoking Refiner agent for label: {label!r}")
-    """
-    Use Refiner agent to improve a failed label. Returns new label or None.
-    """
-    refine_task = Task(
-        description=(
-            f"Improve the following label for a cluster of text notes. "
-            f"Label: {label}\n"
-            f"Cluster Content:\n{cluster_text}\n"
-            f"Existing Labels: {sorted(existing_labels)}\n"
-            "Return your answer as a JSON object: {\"label\": \"...\"}."
-        ),
-        expected_output='{"label": "two-four-word-label"}',
-        agent=refiner_agent,
-    )
-    try:
-        crew_ref = Crew(
-            agents=[refiner_agent],
-            tasks=[refine_task],
-            process=Process.sequential,
-            verbose=True,
-        )
-        raw_ref = crew_ref.kickoff()
-        return parse_label_output(raw_ref)
-    except Exception as e:
-        logger.error(f"Refiner agent failed: {e}")
-    return None
 
 def generate_labels_parallel(clusters: list, existing_labels: set, max_workers: int = 5):
     """
@@ -303,28 +195,3 @@ def batch_generate_cluster_labels(cluster_texts: list, batch_size: int = 4, max_
             batch_results = {idx: generate_unique_label(text, idx, existing_labels) for text, idx in batch}
         results.update(batch_results)
     return results
-
-# Define Validator and Refiner agents
-validator_agent = Agent(
-    role="Label Validator",
-    goal=(
-        "Review a proposed cluster label and confirm it is concise (2-4 words), unique, and highly relevant to the cluster content. "
-        "Reject labels that are too long, generic, or duplicate any existing label."
-    ),
-    backstory=(
-        "You are an expert in semantic validation. You ensure all cluster labels are precise, unique, and meaningful."
-    ),
-    llm='gpt-4',
-)
-
-refiner_agent = Agent(
-    role="Label Refiner",
-    goal=(
-        "Improve a failed or rejected cluster label, making it concise, unique, and highly relevant to the cluster content. "
-        "Never repeat any label from the provided list."
-    ),
-    backstory=(
-        "You are an expert in semantic refinement. You fix and improve cluster labels that do not meet requirements."
-    ),
-    llm='gpt-4',
-)
