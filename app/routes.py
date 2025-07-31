@@ -939,44 +939,54 @@ def graph_query():
         if not hasattr(graph_builder, "all_chunks"):
       # fallback: load *from RedisGraph* if in‐memory chunks aren't set
             graph_builder.load_graph_from_redis()
-            current_app.graph_builder = graph_builder
-
-        result = graph_builder.query_graph_link_response(data["query"])
-        res = (result.get('answer') or '').strip()
-        source = (result.get('sources') or '').strip()
-        url_pattern = r"https?://\S+"
-        links = re.findall(url_pattern, source)
-        clean_text = re.sub(url_pattern, "", result["answer"]).strip()
+            current_app.graph_builder = graph_builder        # Use the model_name from the request if specified, default to "together"
+        model_name = data.get("model_name", "together")
         
+        # Get the response from GraphFiles
+        result = graph_builder.query_graph_link_response(data["query"])
+        clean_text = result.get('answer', '').strip()
+        source = result.get('source', '')
+        
+        # Build the response JSON
         response_json = {"response": clean_text}
-        if res.lower() == "i don't have enough information.":
-            response_json = {
-                "response": clean_text
-            }
-       
-        # current_app.logger.info(f"✅ Graph Query Result: {response_json}")
-
-        rag = RAG(ChromaDB(),model_source="together")
-
+        
+        # Add source information
+        if source:
+            # Check if source is a URL or a file path
+            url_pattern = r"^https?://"
+            if re.match(url_pattern, source):
+                response_json["sources"] = source
+            else:
+                # Handle file path - extract just the filename
+                filename = os.path.basename(source) if source else ""
+                if filename:
+                    response_json["sources"] = filename
+        
+        # Add a summary for voice features
+        rag = RAG(ChromaDB(), model_source=model_name)
+        
         summary_prompt = (
         f"Summarize the following answer in less than or equal to 30 words.\n"
         f"Curated Query: \"{data['query']}\"\n"
         f"Answer: \"{clean_text}\"")
-
-        summary_resp = rag.model.invoke(summary_prompt)
-        summary_text = summary_resp.content.strip()
-        # voice feature - end
-
-        response_json["summary"] = summary_text
-        filename = result.get("sources","")
-        if links:
-            response_json["link"] = links[0]
+        try:
+            summary_resp = rag.model.invoke(summary_prompt)
+            summary_text = summary_resp.content.strip()
+            response_json["summary"] = summary_text
+        except Exception as e:
+            current_app.logger.error(f"Failed to generate summary: {str(e)}")
+            response_json["summary"] = clean_text[:100] + "..."
+            
+        # Check if source is a URL
+        url_pattern = r"^https?://"
+        if source and re.match(url_pattern, source):
+            response_json["link"] = source
         else:
-            filename = result.get("sources", "")
+            filename = result.get("source", "")
             if filename:
                 try:
-                    file_url = url_for('main.download_graph_file', filename=filename, _external=True)
-                    response_json["sources"] = [{"name": filename, "url": file_url}]
+                    file_url = url_for('main.download_graph_file', filename=os.path.basename(filename), _external=True)
+                    response_json["sources"] = [{"name": os.path.basename(filename), "url": file_url}]
                 except Exception as e:
                     current_app.logger.warning(f"⚠️ Skipped building file URL due to: {e}")
 
