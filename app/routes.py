@@ -940,7 +940,7 @@ def graph_query():
       # fallback: load *from RedisGraph* if in‐memory chunks aren't set
             graph_builder.load_graph_from_redis()
             current_app.graph_builder = graph_builder        # Use the model_name from the request if specified, default to "together"
-        model_name = data.get("model_name", "together")
+       
         
         # Get the response from GraphFiles
         result = graph_builder.query_graph_link_response(data["query"])
@@ -963,24 +963,20 @@ def graph_query():
                     response_json["sources"] = filename
         
         # Add a summary for voice features
-        rag = RAG(ChromaDB(), model_source=model_name)
+        rag = RAG(ChromaDB(), model_source="together")
         
         summary_prompt = (
         f"Summarize the following answer in less than or equal to 30 words.\n"
         f"Curated Query: \"{data['query']}\"\n"
         f"Answer: \"{clean_text}\"")
-        try:
-            summary_resp = rag.model.invoke(summary_prompt)
-            summary_text = summary_resp.content.strip()
-            response_json["summary"] = summary_text
-        except Exception as e:
-            current_app.logger.error(f"Failed to generate summary: {str(e)}")
-            response_json["summary"] = clean_text[:100] + "..."
-            
+        summary_resp = rag.model.invoke(summary_prompt)
+        summary_text = summary_resp.content.strip()
+        response_json["summary"] = summary_text
         # Check if source is a URL
         url_pattern = r"^https?://"
         if source and re.match(url_pattern, source):
             response_json["link"] = source
+            
         else:
             filename = result.get("source", "")
             if filename:
