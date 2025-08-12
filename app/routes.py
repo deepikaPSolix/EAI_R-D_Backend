@@ -533,8 +533,8 @@ def query_vanna(data=None):
         
         counter = 0
         while (type(df) == Exception or type(df) == vanna.exceptions.ValidationError) and counter < 2:
-            current_app.logger.info("Vanna run_sql error occurred:", df)
-            current_app.logger.info(f"Vanna run_sql query attempt {counter + 1}:")
+            current_app.logger.info("Vanna.AI run_sql error occurred:", df)
+            current_app.logger.info(f"Vanna.AI run_sql query attempt {counter + 1}:")
             # ✅ Ask Vanna.AI a question
             sql, df, fig = vn.ask(
                 question=vanna_query,
@@ -937,54 +937,47 @@ def graph_query():
 
         graph_builder = current_app.graph_builder
         if not hasattr(graph_builder, "all_chunks"):
-      # fallback: load *from RedisGraph* if in‐memory chunks aren't set
+            # fallback: load *from RedisGraph* if in‐memory chunks aren't set
             graph_builder.load_graph_from_redis()
-            current_app.graph_builder = graph_builder        # Use the model_name from the request if specified, default to "together"
-       
-        
+            current_app.graph_builder = graph_builder
+
         # Get the response from GraphFiles
         result = graph_builder.query_graph_link_response(data["query"])
         clean_text = result.get('answer', '').strip()
-        source = result.get('source', '')
-        
+        sources = result.get('sources', [])
+
         # Build the response JSON
         response_json = {"response": clean_text}
-        
-        # Add source information
-        if source:
-            # Check if source is a URL or a file path
-            url_pattern = r"^https?://"
-            if re.match(url_pattern, source):
-                response_json["sources"] = source
-            else:
-                # Handle file path - extract just the filename
-                filename = os.path.basename(source) if source else ""
-                if filename:
-                    response_json["sources"] = filename
-        
+
+        # Format sources (top 3)
+        formatted_sources = []
+        for src in sources[:3]:
+            if isinstance(src, dict):
+                # Already formatted as {name, url}
+                formatted_sources.append(src)
+            elif isinstance(src, str):
+                url_pattern = r"^https?://"
+                if re.match(url_pattern, src):
+                    formatted_sources.append({"name": src, "url": src})
+                else:
+                    filename = os.path.basename(src)
+                    try:
+                        file_url = url_for('main.download_graph_file', filename=filename, _external=True)
+                        formatted_sources.append({"name": filename, "url": file_url})
+                    except Exception as e:
+                        current_app.logger.warning(f"⚠️ Skipped building file URL due to: {e}")
+        if formatted_sources:
+            response_json["sources"] = formatted_sources
+
         # Add a summary for voice features
         rag = RAG(ChromaDB(), model_source="together")
-        
         summary_prompt = (
-        f"Summarize the following answer in less than or equal to 30 words.\n"
-        f"Curated Query: \"{data['query']}\"\n"
-        f"Answer: \"{clean_text}\"")
+            f"Summarize the following answer in less than or equal to 30 words.\n"
+            f"Curated Query: \"{data['query']}\"\n"
+            f"Answer: \"{clean_text}\"")
         summary_resp = rag.model.invoke(summary_prompt)
         summary_text = summary_resp.content.strip()
         response_json["summary"] = summary_text
-        # Check if source is a URL
-        url_pattern = r"^https?://"
-        if source and re.match(url_pattern, source):
-            response_json["link"] = source
-            
-        else:
-            filename = result.get("source", "")
-            if filename:
-                try:
-                    file_url = url_for('main.download_graph_file', filename=os.path.basename(filename), _external=True)
-                    response_json["sources"] = [{"name": os.path.basename(filename), "url": file_url}]
-                except Exception as e:
-                    current_app.logger.warning(f"⚠️ Skipped building file URL due to: {e}")
 
         return jsonify(response_json)
 

@@ -21,6 +21,8 @@ from pyvis.network import Network
 from app.crew_cluster_labeler import generate_unique_label, batch_generate_cluster_labels
 from app.chroma_db import ChromaDB  # Added import for ChromaDB
 import uuid  # For generating unique IDs
+import spacy
+from nltk.corpus import stopwords
 
 dns_host = os.getenv("DNS_HOST")
 dns_dbname = os.getenv("DNS_DBNAME")
@@ -28,17 +30,83 @@ dns_user = os.getenv("DNS_USER")
 dns_password = os.getenv("DNS_PASSWORD")
 dns_port = os.getenv("DNS_PORT")
 dns = f"host={dns_host} dbname={dns_dbname} user={dns_user} password={dns_password} port={dns_port}"
+nlp = spacy.load("en_core_web_sm")
+try:
+    STOPWORDS = set(stopwords.words('english'))
+except:
+    STOPWORDS = set()
+
+def normalize_text(text):
+    """
+    Lowercase, remove stopwords, lemmatize.
+    """
+    doc = nlp(text.lower())
+    tokens = [token.lemma_ for token in doc if token.is_alpha and token.text not in STOPWORDS]
+    return " ".join(tokens)
+
+def deduplicate_chunks(chunks, prioritize_graph=True):
+    """
+    Deduplicate chunks by their text content only (not by ID).
+    Optionally prioritize graph-retrieved chunks over semantic ones.
+    
+    Args:
+        chunks: List of chunk dictionaries
+        prioritize_graph: Whether to prioritize graph-retrieved chunks
+        
+    Returns:
+        List of deduplicated chunks
+    """
+    seen_texts = set()
+    unique_chunks = []
+    
+    # Sort chunks by retrieval type if prioritizing graph chunks
+    if prioritize_graph:
+        chunks = sorted(chunks, key=lambda x: 0 if isinstance(x, dict) and x.get("retrieval_type") == "graph" else 1)
+        current_app.logger.info(f"🔄 Sorting chunks to prioritize graph-based retrieval")
+    
+    duplicates_by_text = 0
+    
+    for chunk in chunks:
+        if isinstance(chunk, dict):
+            text = chunk.get("text") or chunk.get("data")
+        else:
+            text = str(chunk)
+        if text and text in seen_texts:
+            duplicates_by_text += 1
+            continue
+        if text:
+            seen_texts.add(text)
+        unique_chunks.append(chunk)
+    
+    current_app.logger.info(f"🔍 Deduplication: removed {duplicates_by_text} duplicates by text content")
+    current_app.logger.info(f"📊 Deduplication results: {len(unique_chunks)} unique chunks from {len(chunks)} total")
+    
+    return unique_chunks
 class GraphFiles():
     def __init__(self):
         self.st_model = SentenceTransformer("all-MiniLM-L6-v2")
         self.llm = LLMModel.from_together()
         self.all_chunks=None
-        self.all_embeddings = None
-        # Initialize ChromaDB client for graph chunks
+        self.all_embeddings = None        
+        self.session_id = str(uuid.uuid4())[:8]  # Generate a unique session ID        # Initialize ChromaDB client for graph chunks
         self.chroma_db = ChromaDB()
-        # Create a separate collection for graph chunks
-        self.graph_collection = self.chroma_db.chroma_client.get_or_create_collection(name="graph_chunks")
-   
+        # Clean up old session collections to prevent unlimited growth
+        deleted_count = self.chroma_db.cleanup_session_collections(max_collections=15, preserve_newest=10)
+        if deleted_count > 0:
+            current_app.logger.info(f"🧹 Cleaned up {deleted_count} old ChromaDB collections")
+            
+        # Clean up old Redis graphs to prevent unlimited growth
+        redis_store = GraphRedisStorage()
+        deleted_graphs = redis_store.cleanup_old_graphs(max_graphs=15)
+        if deleted_graphs > 0:
+            current_app.logger.info(f"🧹 Cleaned up {deleted_graphs} old Redis graphs")
+            
+        # Create a unique collection name for this session
+        self.collection_name = f"graph_chunks_{self.session_id}"
+        current_app.logger.info(f"🆕 Creating new session-specific ChromaDB collection: {self.collection_name}")
+        # Create a new collection for this session (no need to delete anything)
+        self.graph_collection = self.chroma_db.chroma_client.get_or_create_collection(name=self.collection_name)
+    
     def _ensure_all_chunks_are_dicts(self):
         """
         Normalize self.all_chunks to a list of dicts with 'text' and 'source'.
@@ -119,6 +187,19 @@ class GraphFiles():
                                max_chunks_for_graph: int = 1500):
         current_app.logger.info(f"CHUNKS received: {len(chunks)}")
         
+        # Deduplicate chunks by text before building the graph
+        original_chunk_count = len(chunks)
+        chunks = deduplicate_chunks(chunks, prioritize_graph=False)
+        deduped_chunk_count = len(chunks)
+        current_app.logger.info(f"🧹 Deduplicated input chunks for graph: {original_chunk_count} -> {deduped_chunk_count} unique chunks")
+        
+        # Normalize text before embedding
+        for chunk in chunks:
+            if isinstance(chunk, dict):
+                chunk["text"] = normalize_text(chunk.get("text", ""))
+            else:
+                chunk = normalize_text(str(chunk))
+
         G_nx = nx.Graph(); processed_texts = []
         for idx, chunk in enumerate(chunks):
             try:
@@ -182,46 +263,183 @@ class GraphFiles():
         
         for idx, com in enumerate(partition.membership):
             G_nx.nodes[top_idx[idx]]['cluster'] = int(com)
-        current_app.logger.info("✅ Leiden partition done")
-
+        current_app.logger.info("✅ Leiden partition done")        
         pg = GraphPostgresStorage(dns=dns)
         self.graph_id = pg.save_graph(G_nx)
         current_app.logger.info(f"Saved graph {self.graph_id} to Postgres")
 
-        redis_store = GraphRedisStorage()
+        # Use session-specific RedisGraph storage
+        redis_store = GraphRedisStorage(session_id=self.session_id)
         redis_store.store_graph(G_nx)
-        current_app.logger.info("Saved graph to RedisGraph")
+        current_app.logger.info(f"Saved graph to RedisGraph with session ID {self.session_id}")
 
         # Store chunks in ChromaDB
         self.store_chunks_in_chroma()
         current_app.logger.info("Saved chunks to ChromaDB")
+
+        # After Leiden clustering
+        # Merge clusters with highly similar centroids
+        cluster_ids = set(partition.membership)
+        cluster_centroids = {}
+        for cid in cluster_ids:
+            indices = [i for i, c in enumerate(partition.membership) if c == cid]
+            if indices:
+                cluster_embs = emb_trim[indices]
+                cluster_centroids[cid] = np.mean(cluster_embs, axis=0)
+        merged = set()
+        for cid1 in cluster_ids:
+            for cid2 in cluster_ids:
+                if cid1 >= cid2 or cid1 in merged or cid2 in merged:
+                    continue
+                sim = cosine_similarity([cluster_centroids[cid1]], [cluster_centroids[cid2]])[0][0]
+                if sim > 0.80:
+                    # Merge cid2 into cid1
+                    for i, c in enumerate(partition.membership):
+                        if c == cid2:
+                            partition.membership[i] = cid1
+                    merged.add(cid2)
+        current_app.logger.info(f"✅ Merged clusters with highly similar centroids: {merged}")
 
         self.G_nx           = G_nx
         self.chunk_node_ids = list(G_nx.nodes())
         self.chunks         = [G_nx.nodes[n]["text"] for n in self.chunk_node_ids]
         self.embeddings     = self.st_model.encode(self.chunks)
 
-        return self.graph_id, G_nx
-
-
+        return self.graph_id, G_nx    
+    def load_graph_from_redis(self):
+        """
+        Load graph data from RedisGraph when needed. This is a fallback method
+        when in-memory graph is not available.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            current_app.logger.info(f"🔄 Attempting to load graph from session-specific RedisGraph {self.session_id}")
+            redis_store = GraphRedisStorage(session_id=self.session_id)
+            
+            # Query all nodes from the RedisGraph
+            query = "MATCH (n:Chunk) RETURN n.idx, n.text, n.source, n.cluster"
+            result = redis_store.graph.query(query)
+            
+            if not result.result_set:
+                current_app.logger.warning("⚠️ No nodes found in RedisGraph")
+                return False
+                
+            # Create a new in-memory graph
+            G_nx = nx.Graph()
+            
+            # Add nodes to the graph
+            for row in result.result_set:
+                idx = int(row[0])
+                text = row[1]
+                source = row[2]
+                cluster = int(row[3])
+                G_nx.add_node(idx, text=text, source=source, cluster=cluster)
+            
+            # Query all edges from the RedisGraph
+            edge_query = "MATCH (a:Chunk)-[r:SIMILAR]->(b:Chunk) RETURN a.idx, b.idx, r.weight"
+            edge_result = redis_store.graph.query(edge_query)
+            
+            # Add edges to the graph
+            for row in edge_result.result_set:
+                source_idx = int(row[0])
+                target_idx = int(row[1])
+                weight = float(row[2])
+                G_nx.add_edge(source_idx, target_idx, weight=weight)
+            
+            # Update the instance variables
+            self.G_nx = G_nx
+            self.chunk_node_ids = list(G_nx.nodes())
+            self.all_chunks = [
+                {"text": G_nx.nodes[n].get("text", ""), "source": G_nx.nodes[n].get("source", "No Source Available")}
+                for n in self.chunk_node_ids
+            ]
+            self._ensure_all_chunks_are_dicts()
+            
+            # Load or generate embeddings
+            try:
+                self.all_embeddings = self.st_model.encode([c["text"] for c in self.all_chunks])
+                current_app.logger.info(f"✅ Successfully generated embeddings for {len(self.all_chunks)} chunks")
+            except Exception as e:
+                current_app.logger.error(f"❌ Failed to generate embeddings: {e}")
+                return False
+                
+            current_app.logger.info(f"✅ Successfully loaded graph from RedisGraph with {G_nx.number_of_nodes()} nodes and {G_nx.number_of_edges()} edges")
+            return True
+            
+        except Exception as e:
+            current_app.logger.error(f"❌ Failed to load graph from RedisGraph: {e}", exc_info=True)
+            return False
     def _redisgraph_expand(self, seed_ids, max_depth=2, limit=20):
         if seed_ids is None or len(seed_ids) == 0:
             return []
 
-        store     = GraphRedisStorage()
-        graph     = store.graph
-        seed_list = ",".join(str(i) for i in seed_ids)
-        q = f"""
-        MATCH (c:Chunk)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
-        WHERE c.idx IN [{seed_list}]
-        RETURN DISTINCT x.idx, x.text, x.source
-        LIMIT {limit}
-        """
-        result = graph.query(q)
-        return [
-            {"idx": int(r[0]), "text": r[1], "source": r[2]}
-            for r in result.result_set
-        ]
+        try:
+            # Use session-specific RedisGraph storage
+            store = GraphRedisStorage(session_id=self.session_id)
+            graph = store.graph
+            
+            # Convert seed IDs to strings for consistent handling
+            seed_str_ids = [str(i) for i in seed_ids]
+            
+            # Query using original_id property for non-numeric IDs
+            seed_query_parts = []
+            for seed_id in seed_str_ids:
+                try:
+                    # Check if it's a numeric ID
+                    int(seed_id)
+                    # If numeric, query by idx
+                    seed_query_parts.append(f"c.idx = {seed_id}")
+                except (ValueError, TypeError):
+                    # If string ID, query by original_id
+                    seed_query_parts.append(f"c.original_id = '{seed_id}'")
+            
+            seed_query = " OR ".join(seed_query_parts)
+            if not seed_query_parts:
+                # Fallback if no valid queries could be constructed
+                return []
+                
+            q = f"""
+            MATCH (c:Chunk)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
+            WHERE {seed_query}
+            RETURN DISTINCT x.idx, x.text, x.source, x.original_id
+            LIMIT {limit}
+            """
+            result = graph.query(q)
+            
+            # Process results, using original_id if available
+            valid_results = []
+            
+            # Validate indices before returning
+            max_idx = len(self.all_chunks) - 1 if self.all_chunks else -1
+            
+            for r in result.result_set:
+                idx = int(r[0])  # This is the numeric ID
+                original_id = r[3] if len(r) > 3 else str(idx)  # Use original_id if available
+                
+                # Try to convert original_id to int if it was originally numeric
+                try:
+                    idx_to_use = int(original_id)
+                except ValueError:
+                    # For combined graph nodes (like "8_6"), keep as string
+                    idx_to_use = original_id
+                
+                # Add to results if within valid range
+                if isinstance(idx_to_use, int) and (max_idx == -1 or idx_to_use <= max_idx):
+                    valid_results.append({"idx": idx_to_use, "text": r[1], "source": r[2]})
+                elif isinstance(idx_to_use, str):
+                    # For string IDs, include without index validation
+                    valid_results.append({"idx": idx_to_use, "text": r[1], "source": r[2]})
+                else:
+                    current_app.logger.warning(f"⚠️ Graph returned out-of-range index: {idx_to_use} (max valid: {max_idx})")
+            
+            current_app.logger.info(f"📊 Graph expansion: {len(valid_results)}/{len(result.result_set)} valid results")
+            return valid_results
+            
+        except Exception as e:
+            current_app.logger.error(f"❌ Graph expansion failed: {str(e)}", exc_info=True)
+            return []
 
     def get_main_node_label_from_url(self, url):
         netloc = urlparse(url).netloc
@@ -236,6 +454,7 @@ class GraphFiles():
             return ", ".join([os.path.splitext(os.path.basename(f))[0] for f in filenames])
         else:
             return f"{len(filenames)} Uploaded Files"
+    
     def render_graph_html(self, G_nx, min_cluster_size, MAX_LABEL_NODES, threshold):
         clusters = defaultdict(list)
         existing_labels = set()
@@ -417,11 +636,19 @@ class GraphFiles():
                     for n in self.chunk_node_ids
                 ]
 
-            self._ensure_all_chunks_are_dicts()
-
+            self._ensure_all_chunks_are_dicts()            
             self.all_embeddings = self.st_model.encode([
                 chunk["text"] for chunk in self.all_chunks if chunk["text"]
             ])
+            
+            # Store the combined graph in Redis for efficient graph traversal
+            redis_store = GraphRedisStorage(session_id=self.session_id)
+            redis_store.store_graph(combined_G)
+            current_app.logger.info(f"Stored combined clusters in session-specific RedisGraph '{redis_store.graph_name}'")
+            
+            # Store chunks in ChromaDB for efficient vector retrieval
+            self.store_chunks_in_chroma()
+            current_app.logger.info(f"Stored combined clusters in session-specific ChromaDB '{self.collection_name}'")
 
             net = Network(height="800px", width="100%", directed=False)
             main_node = "Main"
@@ -533,17 +760,18 @@ class GraphFiles():
     #         cur.close()
     #         conn.close()
 
-    #     return label
-
+    #     return label      
     def store_chunks_in_chroma(self):
         """
         Store all chunks in ChromaDB for efficient vector retrieval.
+        Uses a session-specific collection to ensure isolation between different runs.
         """
         if not self.all_chunks:
             current_app.logger.warning("No chunks to store in ChromaDB")
             return False
         
         try:
+            # No need to clear - we're using a session-specific collection
             # Prepare data for ChromaDB
             ids = [str(uuid.uuid4()) for _ in range(len(self.all_chunks))]
             texts = [chunk["text"] for chunk in self.all_chunks]
@@ -556,12 +784,35 @@ class GraphFiles():
                 if hasattr(self, "G_nx") and self.G_nx.has_node(i):
                     cluster_id = self.G_nx.nodes[i].get("cluster", -1)
                 
+                # Ensure all metadata values are valid types (str, int, float, bool)
+                source = chunk.get("source", "No Source Available")
+                if source is None:
+                    source = "No Source Available"
+                    
+                graph_id = getattr(self, "graph_id", None)
+                if graph_id is None:
+                    graph_id = -1
+                    
+                file_names = chunk.get("file_names", [])
+                if file_names is None:
+                    file_names = []
+                file_names_str = ",".join(file_names) if file_names else ""
+                
+                # Create a metadata dictionary with no None values
                 metadata = {
-                    "source": chunk.get("source", "No Source Available"),
-                    "graph_id": getattr(self, "graph_id", None),
+                    "source": source,
+                    "graph_id": graph_id,
                     "node_id": i,
-                    "cluster_id": cluster_id
+                    "cluster_id": cluster_id,
+                    "chunk_id": str(uuid.uuid4()),  # Add unique chunk_id
+                    "file_names": file_names_str  # Convert to string to satisfy ChromaDB
                 }
+                
+                # Double-check that no values are None
+                for key, value in list(metadata.items()):
+                    if value is None:
+                        metadata[key] = ""  # Replace None with empty string
+                
                 metadatas.append(metadata)
             
             # Add data to the graph_chunks collection
@@ -574,12 +825,11 @@ class GraphFiles():
             # Map IDs to original indices for retrieval
             self.chroma_id_map = {id_str: idx for idx, id_str in enumerate(ids)}
             
-            current_app.logger.info(f"✅ Successfully stored {len(ids)} chunks in ChromaDB collection")
+            current_app.logger.info(f"✅ Successfully stored {len(ids)} chunks in session-specific ChromaDB collection '{self.collection_name}'")
             return True
         except Exception as e:
             current_app.logger.error(f"❌ Failed to store chunks in ChromaDB: {e}", exc_info=True)
             return False
-
     def query_chroma_chunks(self, query_text, n_results=8):
         """
         Query the ChromaDB collection for chunks relevant to the query.
@@ -592,10 +842,12 @@ class GraphFiles():
             List of chunk dictionaries with text and source
         """
         if not hasattr(self, "graph_collection"):
-            current_app.logger.warning("ChromaDB collection not initialized")
+            current_app.logger.warning("❌ ChromaDB collection not initialized")
             return []
             
-        try:
+        try:              
+            current_app.logger.info(f"🔍 Querying current session's ChromaDB collection '{self.collection_name}' with '{query_text[:50]}...' for {n_results} results")
+            
             # Query the graph_chunks collection
             results = self.graph_collection.query(
                 query_texts=[query_text],
@@ -605,119 +857,178 @@ class GraphFiles():
             # Process results
             chunks = []
             if results and len(results["ids"]) > 0:
-                for i in range(len(results["ids"][0])):
+                num_results = len(results["ids"][0])
+                current_app.logger.info(f"✅ Current session's ChromaDB collection returned {num_results} results")
+                
+                for i in range(num_results):
+                    distance = results["distances"][0][i] if "distances" in results else None
+                    source = results["metadatas"][0][i].get("source", "No Source Available")
+                    cluster_id = results["metadatas"][0][i].get("cluster_id", -1)
+                    
                     chunk = {
                         "text": results["documents"][0][i],
-                        "source": results["metadatas"][0][i].get("source", "No Source Available"),
+                        "source": source,
                         "graph_node_idx": results["metadatas"][0][i].get("node_id"),
-                        "distance": results["distances"][0][i] if "distances" in results else None
+                        "chunk_id": results["metadatas"][0][i].get("chunk_id"),
+                        "cluster_id": cluster_id,                        
+                        "graph_id": results["metadatas"][0][i].get("graph_id"),
+                        "distance": distance
                     }
                     chunks.append(chunk)
                     
+                    current_app.logger.debug(f"📄 Result {i+1}: Source={source}, Cluster={cluster_id}, Distance={f'{distance:.4f}' if distance is not None else 'N/A'}")
+                
+                # Log some stats about the results
+                sources = Counter([c.get("source", "Unknown") for c in chunks])
+                clusters = Counter([c.get("cluster_id", -1) for c in chunks])
+                
+                current_app.logger.info(f"📊 Retrieved chunks from {len(sources)} unique sources across {len(clusters)} clusters")
+                    
+            else:
+                current_app.logger.warning("⚠️ ChromaDB query returned no results")
+                
             return chunks
         except Exception as e:
             current_app.logger.error(f"❌ ChromaDB query failed: {e}", exc_info=True)
             return []
-            
     def query_graph_link_response(self, query: str) -> dict:
         """
-        Enhanced query method that combines ChromaDB vector search with graph traversal
+        Enhanced hybrid RAG method that combines ChromaDB vector search with graph traversal
         to find the most relevant context for answering the query.
-        
+
         Args:
-            query: The user's question
-            
+        query: The user's question
+
         Returns:
-            Dictionary with answer, source file, and other metadata
+        Dictionary with answer, source file, and other metadata
         """
-        current_app.logger.info(f"📝 Received query: {query!r}")
-        
+        current_app.logger.info(f"📝 [START] Processing query: {query!r}")
+
         # First check if we have any data
         if not self.all_chunks:
+            current_app.logger.warning("❌ No chunks available for retrieval")
             return {"answer": "I don't have enough information.", "source": None}
+
+        current_app.logger.info(f"📊 Total chunks in memory: {len(self.all_chunks)}")
 
         # Initialize result containers
         all_relevant_chunks = []
+        graph_chunks = []
+        semantic_chunks = []
         source_files = set()
         
-        # Step 1: Get semantically similar chunks from ChromaDB
-        chroma_chunks = self.query_chroma_chunks(query, n_results=8)
+        # Step 1: Always get semantically similar chunks from ChromaDB
+        current_app.logger.info("🔍 [STEP 1] Retrieving semantically similar chunks from ChromaDB")
+        chroma_chunks = self.query_chroma_chunks(query, n_results=12)
         if chroma_chunks:
-            current_app.logger.info(f"Found {len(chroma_chunks)} relevant chunks from ChromaDB")
-            all_relevant_chunks.extend(chroma_chunks)
+            current_app.logger.info(f"✅ Found {len(chroma_chunks)} relevant chunks from ChromaDB")
+            # Mark these as semantic retrieval
+            for chunk in chroma_chunks:
+                chunk["retrieval_type"] = "semantic"
+            semantic_chunks.extend(chroma_chunks)
             # Extract source files
             for chunk in chroma_chunks:
                 if chunk.get('source'):
                     source_files.add(chunk.get('source'))
+        else:
+            current_app.logger.warning("⚠️ No chunks found in ChromaDB")        # Step 2: Always perform graph-based retrieval as well for a true hybrid approach
+        current_app.logger.info("🔍 [STEP 2] Performing graph-based retrieval")
+        self._ensure_all_chunks_are_dicts()
+
+        # Compute embedding for query
+        current_app.logger.info("📊 Computing query embedding")
+        q_emb = self.st_model.encode([query])[0]
+
+        # Get the most similar chunks using the embeddings
+        sims = cosine_similarity([q_emb], self.all_embeddings).flatten()
+        k = max(5, int(len(self.all_chunks) * 0.01))
+        seeds = sims.argsort()[-k:][::-1].tolist()
+        current_app.logger.info(f"✅ Found {len(seeds)} initial seed chunks based on embedding similarity")
+
+        # Use graph to get related chunks
+        current_app.logger.info(f"🔍 Expanding graph with depth=2 from {len(seeds)} seed nodes")
+        expanded = self._redisgraph_expand(seeds, max_depth=2, limit=15)
+        current_app.logger.info(f"✅ Graph expansion found {len(expanded)} additional connected chunks")
+        combined_idxs = list(seeds)
+
+        for e in expanded:
+            if e["idx"] not in combined_idxs:
+                combined_idxs.append(e["idx"])
         
-        # Step 2: If ChromaDB didn't return enough results, fall back to the old method
-        if len(all_relevant_chunks) < 3:
-            current_app.logger.info("Not enough chunks from ChromaDB, falling back to embedding similarity")
-            
-            self._ensure_all_chunks_are_dicts()
-            
-            # Compute embedding for query
-            q_emb = self.st_model.encode([query])[0]
-            
-            # Get the most similar chunks using the embeddings
-            sims = cosine_similarity([q_emb], self.all_embeddings).flatten()
-            k = max(5, int(len(self.all_chunks) * 0.01))
-            seeds = sims.argsort()[-k:][::-1].tolist()
-            
-            # Use graph to get related chunks
-            expanded = self._redisgraph_expand(seeds, max_depth=2, limit=15)
-            combined_idxs = list(seeds)
-            
-            for e in expanded:
-                if e["idx"] not in combined_idxs:
-                    combined_idxs.append(e["idx"])
-            
-            # Create the expanded chunks list
-            for idx in combined_idxs:
-                cu = self.all_chunks[idx]
-                chunk = {
-                    "text": cu.get("text", ""),
-                    "source": cu.get("source", "No Source Available"),
-                    "graph_node_idx": idx
-                }
-                all_relevant_chunks.append(chunk)
-                if chunk.get('source'):
-                    source_files.add(chunk.get('source'))
+        current_app.logger.info(f"📊 Total unique graph nodes after expansion: {len(combined_idxs)}")        # Create the expanded chunks list
+        for idx in combined_idxs:
+            # Check if the index is valid for self.all_chunks
+            if idx < 0 or idx >= len(self.all_chunks):
+                current_app.logger.warning(f"⚠️ Graph returned invalid node index: {idx} (max index: {len(self.all_chunks)-1})")
+                continue
+                
+            cu = self.all_chunks[idx]
+            chunk = {
+                "text": cu.get("text", ""),
+                "source": cu.get("source", "No Source Available"),
+                "graph_node_idx": idx,
+                "retrieval_type": "graph"  # Mark as graph-based retrieval
+            }
+            graph_chunks.append(chunk)
+            if chunk.get('source'):
+                source_files.add(chunk.get('source'))# Step 3: Merge and deduplicate chunks from both retrieval methods
+        current_app.logger.info("🔍 [STEP 3] Merging and deduplicating chunks")
+        current_app.logger.info(f"📊 Before deduplication: {len(graph_chunks)} graph chunks, {len(semantic_chunks)} semantic chunks")
         
-        # Step 3: Re-rank chunks for better context selection using embeddings
+        # Combine all chunks
+        all_chunks_combined = graph_chunks + semantic_chunks
+
+        # Deduplicate with graph priority
+        all_relevant_chunks = deduplicate_chunks(all_chunks_combined, prioritize_graph=True)
+
+        current_app.logger.info(f"📊 After deduplication: {len(all_relevant_chunks)} unique chunks")
+        current_app.logger.info(f"📊 Breakdown: {len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'graph'])} graph chunks, {len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'semantic'])} semantic chunks")
+
+        # Step 4: Re-rank combined chunks for better context selection
+        current_app.logger.info("🔍 [STEP 4] Re-ranking chunks based on relevance to query")
         texts = [c["text"] for c in all_relevant_chunks]
         if texts:
             # Re-encode for accurate ranking
+            current_app.logger.info("📊 Computing similarity scores for re-ranking")
             q_emb = self.st_model.encode([query])[0]
             chunk_embs = self.st_model.encode(texts)
             sims = cosine_similarity([q_emb], chunk_embs).flatten()
-            
+
             # Get top chunks based on similarity ranking
-            top_indices = np.argsort(sims)[::-1][:8]  # Get top 8 chunks
-            
+            top_k = min(10, len(all_relevant_chunks))  # Increased from 8 to 10
+            top_indices = np.argsort(sims)[::-1][:top_k]
+            current_app.logger.info(f"📊 Selected top {len(top_indices)} chunks for context")
+
             # Prepare context from top chunks
+            current_app.logger.info("📝 Building context for LLM prompt")
             context_units = []
             for i in top_indices:
                 chunk = all_relevant_chunks[i]
                 src = chunk.get("source", "")
-                context_units.append(f"**Source:** {src}\n{chunk['text']}")
+                retrieval_type = chunk.get("retrieval_type", "unknown")
+                similarity_score = sims[i]
+                current_app.logger.info(f"📄 Including chunk from {src} (type: {retrieval_type}, similarity: {similarity_score:.4f})")
+                context_units.append(f"**Source:** {src} ({retrieval_type})\n{chunk['text']}")
                 if src:
                     source_files.add(src)
-            
+
             # Join all contexts
             context = "\n---\n".join(context_units)
+            current_app.logger.info(f"📊 Final context built with {len(context_units)} chunks")
         else:
+            current_app.logger.warning("⚠️ No text content found in chunks")
             context = ""
-            top_indices = []
-        
-        # No relevant information found
+            top_indices = []        # No relevant information found
         if not context:
+            current_app.logger.warning("❌ No relevant context found for the query")
             return {"answer": "I don't have enough information to answer that question.", "source": None}
-        
+
         # Convert source files to a list for the prompt
         source_file_list = list(source_files)
+        current_app.logger.info(f"📊 Sources referenced: {len(source_file_list)} unique files")
         
         # Create prompt with simplified instruction for source attribution
+        current_app.logger.info("🔍 [STEP 5] Building LLM prompt with context")
         prompt = (
             "You are a helpful assistant. Respond to the user's question using only the context below.\n\n"
             f"📘 Context:\n{context}\n\n"
@@ -729,15 +1040,19 @@ class GraphFiles():
             "- If there is not enough information in the context, respond exactly with:\n"
             "  [NO_ANSWER]"
         )
-        
+        current_app.logger.info(f"📝 Prompt built with {len(context)} characters of context")
+
         try:
             # Generate the response
+            current_app.logger.info("🔍 [STEP 6] Generating response with LLM")
             raw_response = self.llm.model.invoke(prompt)
             response_text = str(raw_response.content).strip()
-            
+            current_app.logger.info(f"✅ LLM generated a response of {len(response_text)} characters")
+
             if "[NO_ANSWER]" in response_text:
+                current_app.logger.warning("⚠️ LLM indicated insufficient information")
                 return {"answer": "I don't have enough information.", "source": None}
-            
+
             # Get primary source for attribution
             primary_source = None
             if source_file_list:
@@ -748,12 +1063,45 @@ class GraphFiles():
                 top_chunk = all_relevant_chunks[top_indices[0]]
                 if top_chunk.get('source'):
                     primary_source = top_chunk.get('source')
+                    current_app.logger.info(f"📄 Primary source set to: {primary_source}")
+
+            # Include retrieval stats in response for debugging/analysis
+            graph_chunk_count = len([c for c in all_relevant_chunks if c.get("retrieval_type") == "graph"])
+            semantic_chunk_count = len([c for c in all_relevant_chunks if c.get("retrieval_type") == "semantic"])
             
+            # Log detailed performance metrics
+            current_app.logger.info(f"""
+            📊 [PERFORMANCE METRICS]
+            - Total chunks considered: {len(all_relevant_chunks)}
+            - Graph-based chunks: {graph_chunk_count}
+            - Semantic chunks: {semantic_chunk_count}
+            - Source files referenced: {len(source_files)}
+            - Response length: {len(response_text)} characters
+            """)
+
+            # Get top 3 unique sources by similarity
+            top_sources = []
+            seen_sources = set()
+            for i in top_indices:
+                chunk = all_relevant_chunks[i]
+                src = chunk.get("source", "")
+                if src and src not in seen_sources:
+                    top_sources.append(src)
+                    seen_sources.add(src)
+                if len(top_sources) == 3:
+                    break
+
             return {
                 "answer": response_text,
-                "source": primary_source
+                "sources": top_sources,  # <-- send top 3 unique sources
+                "stats": {
+                    "total_chunks": len(all_relevant_chunks),
+                    "graph_chunks": graph_chunk_count,
+                    "semantic_chunks": semantic_chunk_count,
+                    "source_files": len(source_files)
+                }
             }
-            
+
         except Exception as e:
-            current_app.logger.error(f"❌ LLM call failed: {str(e)}")
+            current_app.logger.error(f"❌ LLM call failed: {str(e)}", exc_info=True)
             return {"answer": "There was an error while generating the response.", "source": None}

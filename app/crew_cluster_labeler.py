@@ -97,6 +97,7 @@ def validate_label(label, cluster_text, existing_labels):
             f"Review the following label for a cluster of text notes. "
             f"Label: {label}\n"
             f"Cluster Content:\n{cluster_text}\n"
+            "NOTE: The cluster may contain similar or overlapping text from different source files. When validating a label, always consider both the text and the source files. If similar text appears in multiple clusters but comes from different sources, ensure the label reflects this distinction.\n"
             f"Existing Labels: {sorted(existing_labels)}\n"
             "Respond with a JSON object: {\"valid\": true/false, \"reason\": \"...\"} explaining why the label is valid or not. "
             "Check for semantic uniqueness (not just string match) and coverage of the cluster's meaning."
@@ -131,8 +132,10 @@ def refine_label(label, cluster_text, existing_labels):
             f"Improve the following label for a cluster of text notes. "
             f"Label: {label}\n"
             f"Cluster Content:\n{cluster_text}\n"
+            "NOTE: The cluster may contain similar or overlapping text from different source files. When refining a label, always consider both the text and the source files. If similar text appears in multiple clusters but comes from different sources, ensure the label reflects this distinction.\n"
             f"Existing Labels: {sorted(existing_labels)}\n"
             "Return your answer as a JSON object: {\"label\": \"...\"}. "
+            "IMPORTANT: Your label must be unique and highlight what is DISTINCT about this cluster compared to others.\n"
             "Ensure the label is semantically unique and covers the cluster's main theme."
         ),
         expected_output='{"label": "two-four-word-label"}',
@@ -153,11 +156,13 @@ def refine_label(label, cluster_text, existing_labels):
 
 def generate_unique_label(cluster_text: str, cluster_id: int, existing_labels: set):
     logger.info(f"Starting label generation for Cluster ID: {cluster_id}")
-    max_retries = 2
-    final_label = None
+    max_attempts = 3
+    attempt = 0
+    label = None
     failed_labels = []
-    for attempt in range(max_retries + 1):
-        # Generator agent
+    while attempt < max_attempts:
+        attempt += 1
+        # Initial label generation
         generation_task = Task(
             description=(
                 "You are to generate a label for the following cluster of text notes. "
@@ -165,75 +170,58 @@ def generate_unique_label(cluster_text: str, cluster_id: int, existing_labels: s
                 "Do NOT repeat any label from the provided list of existing labels, even if the meaning is similar. "
                 "Return your answer as a JSON object in the following format: {\"label\": \"...\"}. "
                 "Do not include any other text, explanation, or suggestions. Only return the JSON object.\n"
+                "IMPORTANT: Your label must be unique and highlight what is DISTINCT about this cluster compared to others.\n"
+                "NOTE: The cluster may contain similar or overlapping text from different source files. When generating a label, always consider both the text and the source files. If similar text appears in multiple clusters but comes from different sources, ensure the label reflects this distinction.\n"
                 f"Cluster Content:\n{cluster_text}\n"
                 f"Existing Labels: {sorted(existing_labels)}\n"
             ),
             expected_output='{"label": "two-four-word-label"}',
-            agent=label_generator,
+            agent=label_generator
         )
         try:
             crew_gen = Crew(
                 agents=[label_generator],
                 tasks=[generation_task],
                 process=Process.sequential,
-                verbose=True,
+                verbose=True
             )
             raw_label = crew_gen.kickoff()
             logger.info(f"Raw label output for Cluster ID {cluster_id}: {raw_label}")
             label = parse_label_output(raw_label)
-            if not label:
-                logger.error(f"No valid label generated for Cluster ID: {cluster_id}. Attempt {attempt+1}/{max_retries+1}")
-                failed_labels.append((cluster_text, None))
-                continue
-            generated_label = label
         except Exception as e:
             logger.error(f"❌ Generation failed: {e}", exc_info=True)
-            failed_labels.append((cluster_text, None))
-            generated_label = ""
-        # Local checks
-        if not is_valid_label(generated_label):
-            logger.warning(f"⚠️ Invalid label format: {generated_label!r}")
-            failed_labels.append((cluster_text, generated_label))
-            continue
-        # Validator agent
-        valid, reason = validate_label(generated_label, cluster_text, existing_labels)
-        if not valid:
-            logger.warning(f"Validator agent rejected label: {generated_label!r}. Reason: {reason}")
-            failed_labels.append((cluster_text, generated_label))
-            # Refiner agent
-            refined = refine_label(generated_label, cluster_text, existing_labels)
-            if refined and is_valid_label(refined):
-                valid_refined, reason_refined = validate_label(refined, cluster_text, existing_labels)
-                if valid_refined and refined.lower() not in existing_labels:
-                    final_label = refined
-                    logger.info(f"Refiner agent produced valid label: {refined!r}")
-                    break
-                else:
-                    logger.warning(f"Refined label rejected: {refined!r}. Reason: {reason_refined}")
-                    failed_labels.append((cluster_text, refined))
-            continue
-        if generated_label.lower() in existing_labels:
-            logger.warning(f"⚠️ Duplicate label: {generated_label!r}")
-            failed_labels.append((cluster_text, generated_label))
-            continue
-        final_label = generated_label
-        break
-    # Save label in session memory
-    if final_label:
-        existing_labels.add(final_label.lower())
-    # Audit trail: log all failed attempts
-    if failed_labels:
-        for fail_text, fail_label in failed_labels:
-            logger.info(f"Audit trail: Cluster ID {cluster_id}, Failed label: {fail_label!r}, Text length: {len(fail_text)}")
-    return final_label
+            label = None
+        valid, reason = validate_label(label, cluster_text, existing_labels)
+        if valid and label and label.lower() not in existing_labels:
+            logger.info(f"Validator agent accepted label: {label!r}")
+            existing_labels.add(label.lower())
+            logger.info(f"Final label for Cluster ID {cluster_id}: {label!r}")
+            return label
+        else:
+            logger.warning(f"Validator agent rejected label: {label!r}. Reason: {reason}")
+            failed_labels.append((cluster_text, label))
+            # Refine if rejected and attempts remain
+            if attempt < max_attempts:
+                label = refine_label(label, cluster_text, existing_labels)
+            else:
+                break
+    # Fallback: use last attempted label
+    if label and isinstance(label, str) and label.strip():
+        existing_labels.add(label.lower())
+        logger.info(f"Final fallback label for Cluster ID {cluster_id}: {label!r}")
+        return label
+    else:
+        fallback_label = f"Cluster {cluster_id}"
+        existing_labels.add(fallback_label.lower())
+        logger.info(f"No label generated for Cluster ID {cluster_id}. Using fallback: {fallback_label!r}")
+        return fallback_label
 
 def generate_labels_parallel(clusters: list, existing_labels: set, max_workers: int = 5):
     lock = threading.Lock()
     results = {}
     def label_task(cluster_text, cluster_id):
-        with lock:
-            labels_snapshot = set(existing_labels)
-        label = generate_unique_label(cluster_text, cluster_id, labels_snapshot)
+        # Always use the shared existing_labels set
+        label = generate_unique_label(cluster_text, cluster_id, existing_labels)
         with lock:
             if label and label.lower() not in existing_labels:
                 existing_labels.add(label.lower())
