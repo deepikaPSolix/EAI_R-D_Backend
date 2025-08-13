@@ -848,10 +848,13 @@ class GraphFiles():
         try:              
             current_app.logger.info(f"🔍 Querying current session's ChromaDB collection '{self.collection_name}' with '{query_text[:50]}...' for {n_results} results")
             
-            # Query the graph_chunks collection
+            # Query the graph_chunks collection - use dynamic limits based on available data
+            available_chunks = len(self.all_chunks) if self.all_chunks else 100
+            actual_n_results = min(n_results, available_chunks)
+            
             results = self.graph_collection.query(
                 query_texts=[query_text],
-                n_results=min(n_results, 20)  # Limit to prevent overloading
+                n_results=actual_n_results
             )
             
             # Process results
@@ -919,7 +922,9 @@ class GraphFiles():
         
         # Step 1: Always get semantically similar chunks from ChromaDB
         current_app.logger.info("🔍 [STEP 1] Retrieving semantically similar chunks from ChromaDB")
-        chroma_chunks = self.query_chroma_chunks(query, n_results=12)
+        # Dynamic retrieval based on available data - no hardcoded limits
+        max_chroma_results = min(len(self.all_chunks) if self.all_chunks else 50, 100)
+        chroma_chunks = self.query_chroma_chunks(query, n_results=max_chroma_results)
         if chroma_chunks:
             current_app.logger.info(f"✅ Found {len(chroma_chunks)} relevant chunks from ChromaDB")
             # Mark these as semantic retrieval
@@ -941,13 +946,22 @@ class GraphFiles():
 
         # Get the most similar chunks using the embeddings
         sims = cosine_similarity([q_emb], self.all_embeddings).flatten()
-        k = max(5, int(len(self.all_chunks) * 0.01))
+        # Dynamic seed selection - adapt based on data size, no hardcoded percentages
+        total_chunks = len(self.all_chunks)
+        if total_chunks <= 20:
+            k = max(3, total_chunks // 2)  # Use half for small datasets
+        elif total_chunks <= 100:
+            k = max(10, total_chunks // 4)  # Use quarter for medium datasets
+        else:
+            k = max(20, total_chunks // 10)  # Use 10% for large datasets
         seeds = sims.argsort()[-k:][::-1].tolist()
         current_app.logger.info(f"✅ Found {len(seeds)} initial seed chunks based on embedding similarity")
 
         # Use graph to get related chunks
         current_app.logger.info(f"🔍 Expanding graph with depth=2 from {len(seeds)} seed nodes")
-        expanded = self._redisgraph_expand(seeds, max_depth=2, limit=15)
+        # Dynamic expansion limit - scale with available data
+        expansion_limit = max(30, min(total_chunks, total_chunks // 3))
+        expanded = self._redisgraph_expand(seeds, max_depth=2, limit=expansion_limit)
         current_app.logger.info(f"✅ Graph expansion found {len(expanded)} additional connected chunks")
         combined_idxs = list(seeds)
 
@@ -995,20 +1009,54 @@ class GraphFiles():
             sims = cosine_similarity([q_emb], chunk_embs).flatten()
 
             # Get top chunks based on similarity ranking
-            top_k = min(10, len(all_relevant_chunks))  # Increased from 8 to 10
+            # Dynamic context selection - adapt based on available data and query complexity
+            available_chunks = len(all_relevant_chunks)
+            
+            # Determine optimal chunk count based on query type and available data
+            query_words = len(query.split())
+            is_complex_query = query_words > 10 or any(word in query.lower() for word in ['analyze', 'compare', 'detailed', 'comprehensive', 'all', 'every', 'list'])
+            
+            if is_complex_query:
+                # For complex queries, use more context
+                max_context_chunks = min(available_chunks, max(20, available_chunks // 2))
+            else:
+                # For simple queries, use moderate context
+                max_context_chunks = min(available_chunks, max(10, available_chunks // 3))
+                
+            top_k = max_context_chunks
             top_indices = np.argsort(sims)[::-1][:top_k]
-            current_app.logger.info(f"📊 Selected top {len(top_indices)} chunks for context")
+            current_app.logger.info(f"📊 Selected top {len(top_indices)} chunks for context (query complexity: {'high' if is_complex_query else 'normal'})")
 
-            # Prepare context from top chunks
+            # Prepare comprehensive context from top chunks
             current_app.logger.info("📝 Building context for LLM prompt")
             context_units = []
+            
+            # Enhanced context building with intelligent data extraction
             for i in top_indices:
                 chunk = all_relevant_chunks[i]
-                src = chunk.get("source", "")
+                src = chunk.get("source", "Unknown Source")
                 retrieval_type = chunk.get("retrieval_type", "unknown")
                 similarity_score = sims[i]
+                
                 current_app.logger.info(f"📄 Including chunk from {src} (type: {retrieval_type}, similarity: {similarity_score:.4f})")
-                context_units.append(f"**Source:** {src} ({retrieval_type})\n{chunk['text']}")
+                
+                # Smart context enhancement based on content patterns
+                chunk_text = chunk['text']
+                
+                # For queries involving IDs, numbers, or specific data points, enhance context
+                if any(pattern in query.lower() for pattern in ['id', 'number', 'amount', 'date', 'order']):
+                    # Try to extract and highlight important patterns from filenames
+                    import re
+                    filename_base = os.path.splitext(os.path.basename(src))[0]
+                    
+                    # Extract numbers/IDs from filename
+                    numbers_in_filename = re.findall(r'\d+', filename_base)
+                    if numbers_in_filename:
+                        chunk_text = f"[DOCUMENT: {filename_base} - Contains: {', '.join(numbers_in_filename)}]\n{chunk_text}"
+                
+                # Build context with source attribution
+                context_units.append(f"**Source Document:** {os.path.basename(src)}\n**Content:** {chunk_text}")
+                
                 if src:
                     source_files.add(src)
 
@@ -1027,27 +1075,87 @@ class GraphFiles():
         source_file_list = list(source_files)
         current_app.logger.info(f"📊 Sources referenced: {len(source_file_list)} unique files")
         
-        # Create prompt with simplified instruction for source attribution
+        # Create intelligent prompt with comprehensive instructions
         current_app.logger.info("🔍 [STEP 5] Building LLM prompt with context")
-        prompt = (
-            "You are a helpful assistant. Respond to the user's question using only the context below.\n\n"
-            f"📘 Context:\n{context}\n\n"
-            f"❓ Question:\n{query}\n\n"
-            "**Instructions:**\n"
-            "- Use only information from the provided context.\n"
-            "- Be concise and informative.\n"
-            "- Do not mention file names or sources in your response.\n"
-            "- If there is not enough information in the context, respond exactly with:\n"
-            "  [NO_ANSWER]"
-        )
+        
+        # Analyze query to determine processing approach
+        query_lower = query.lower()
+        
+        # Detect if this is a comprehensive extraction query
+        is_extraction_query = any(keyword in query_lower for keyword in [
+            'list', 'all', 'every', 'each', 'numbers', 'ids', 'names', 'items', 
+            'show', 'display', 'find', 'identify', 'extract', 'get', 'provide'
+        ])
+        
+        # Detect if this requires detailed analysis
+        is_analysis_query = any(keyword in query_lower for keyword in [
+            'analyze', 'compare', 'explain', 'describe', 'detail', 'comprehensive',
+            'summary', 'overview', 'breakdown', 'relationship', 'pattern'
+        ])
+        
+        # Count available documents/sources
+        unique_sources = len(source_files)
+        
+        if is_extraction_query or is_analysis_query or unique_sources > 5:
+            prompt = (
+                "You are an expert document analyst. Your task is to thoroughly examine ALL provided context and extract EVERY relevant piece of information that answers the user's question.\n\n"
+                f"📘 Context from {unique_sources} document sources:\n{context}\n\n"
+                f"❓ User Query: {query}\n\n"
+                "**CRITICAL INSTRUCTIONS - READ CAREFULLY:**\n"
+                "🔍 COMPREHENSIVE ANALYSIS REQUIRED:\n"
+                "- Examine EVERY SINGLE document excerpt in the context above\n"
+                "- Do NOT stop after finding just a few items - search through ALL content\n"
+                "- Look for patterns, numbers, IDs, names, dates, or ANY data points relevant to the query\n"
+                "- If the query asks for a list or collection, find ALL instances across ALL documents\n"
+                "- Process each document section systematically and thoroughly\n\n"
+                "📊 PROCESSING APPROACH:\n"
+                "- Scan through each source document methodically\n"
+                "- Cross-reference information between documents\n"
+                "- Consolidate findings from multiple sources\n"
+                "- Present information in a clear, organized manner\n"
+                "- Include quantitative details when available (counts, amounts, percentages, etc.)\n\n"
+                "⚠️ QUALITY STANDARDS:\n"
+                "- Be exhaustive in your search - don't miss any relevant data\n"
+                "- Maintain accuracy - only include information explicitly stated in the context\n"
+                "- If information spans multiple documents, synthesize it comprehensively\n"
+                "- For numerical data, include specific values, not approximations\n"
+                "- If you cannot find sufficient information, respond with: [NO_ANSWER]\n\n"
+                "🎯 OUTPUT REQUIREMENTS:\n"
+                "- Provide complete, thorough responses\n"
+                "- Structure your answer logically\n"
+                "- Include all relevant findings, not just highlights\n"
+                "- Be comprehensive yet concise"
+            )
+        else:
+            prompt = (
+                "You are a helpful document assistant. Use the provided context to answer the user's question accurately and completely.\n\n"
+                f"📘 Context:\n{context}\n\n"
+                f"❓ Question: {query}\n\n"
+                "**Instructions:**\n"
+                "- Use only information from the provided context\n"
+                "- Provide accurate and relevant information\n"
+                "- If the question requires multiple pieces of information, include all of them\n"
+                "- Be thorough but concise\n"
+                "- If there is insufficient information, respond with: [NO_ANSWER]"
+            )
+            
+        current_app.logger.info(f"📝 Prompt built with {len(context)} characters of context ({unique_sources} sources)")
+        current_app.logger.info(f"📋 Query analysis: extraction={is_extraction_query}, analysis={is_analysis_query}, sources={unique_sources}")
         current_app.logger.info(f"📝 Prompt built with {len(context)} characters of context")
 
         try:
             # Generate the response
             current_app.logger.info("🔍 [STEP 6] Generating response with LLM")
+            current_app.logger.info(f"📝 Sending comprehensive prompt with {len(prompt)} characters to LLM")
+            
+            # Log context preview for debugging
+            context_preview = context[:800] + "..." if len(context) > 800 else context
+            current_app.logger.info(f"📄 Context preview: {context_preview}")
+            
             raw_response = self.llm.model.invoke(prompt)
             response_text = str(raw_response.content).strip()
             current_app.logger.info(f"✅ LLM generated a response of {len(response_text)} characters")
+            current_app.logger.info(f"📝 LLM Response: {response_text}")
 
             if "[NO_ANSWER]" in response_text:
                 current_app.logger.warning("⚠️ LLM indicated insufficient information")
@@ -1079,7 +1187,7 @@ class GraphFiles():
             - Response length: {len(response_text)} characters
             """)
 
-            # Get top 3 unique sources by similarity
+            # Get ALL unique sources by similarity - no artificial limits
             top_sources = []
             seen_sources = set()
             for i in top_indices:
@@ -1088,17 +1196,17 @@ class GraphFiles():
                 if src and src not in seen_sources:
                     top_sources.append(src)
                     seen_sources.add(src)
-                if len(top_sources) == 3:
-                    break
+                # No break - include ALL unique sources for comprehensive results
 
             return {
                 "answer": response_text,
-                "sources": top_sources,  # <-- send top 3 unique sources
+                "sources": top_sources,  # All unique sources, no limits
                 "stats": {
                     "total_chunks": len(all_relevant_chunks),
                     "graph_chunks": graph_chunk_count,
                     "semantic_chunks": semantic_chunk_count,
-                    "source_files": len(source_files)
+                    "source_files": len(source_files),
+                    "unique_sources": len(top_sources)
                 }
             }
 

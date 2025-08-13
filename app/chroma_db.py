@@ -21,11 +21,102 @@ class ChromaDB:
         return cls._instance
 
     def __init__(self):
-        self.chroma_client = chromadb.PersistentClient(path="./cache/chromadb")
-        self.collection = self.create_collection()
+        try:
+            self.chroma_client = chromadb.PersistentClient(path="./cache/chromadb")
+            self.collection = self.create_collection()
+        except Exception as e:
+            # If ChromaDB initialization fails due to corrupted metadata, try to recover
+            if "'_type'" in str(e) or "KeyError: '_type'" in str(e):
+                print(f"ChromaDB metadata corruption detected: {e}")
+                print("Attempting to recover by recreating ChromaDB instance...")
+                try:
+                    # Try to remove corrupted metadata and reinitialize
+                    import shutil
+                    import os
+                    import time
+                    chromadb_path = "./cache/chromadb"
+                    if os.path.exists(chromadb_path):
+                        print(f"Removing corrupted ChromaDB directory: {chromadb_path}")
+                        # Try multiple times with delays in case files are locked
+                        for attempt in range(3):
+                            try:
+                                shutil.rmtree(chromadb_path)
+                                break
+                            except OSError as remove_error:
+                                if "Device or resource busy" in str(remove_error) or "being used by another process" in str(remove_error):
+                                    print(f"ChromaDB directory locked, attempt {attempt + 1}/3. Waiting 2 seconds...")
+                                    time.sleep(2)
+                                    if attempt == 2:
+                                        print("⚠️ Unable to remove locked ChromaDB directory. Using alternative path.")
+                                        # Use alternative path with timestamp
+                                        import datetime
+                                        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                                        chromadb_path = f"./cache/chromadb_{timestamp}"
+                                else:
+                                    raise remove_error
+                    
+                    # Recreate the client with fresh metadata
+                    self.chroma_client = chromadb.PersistentClient(path=chromadb_path)
+                    self.collection = self.create_collection()
+                    print("✅ ChromaDB successfully recovered")
+                except Exception as recovery_error:
+                    print(f"❌ Failed to recover ChromaDB: {recovery_error}")
+                    # As a last resort, try using memory-only ChromaDB
+                    try:
+                        print("🔄 Attempting fallback to in-memory ChromaDB...")
+                        self.chroma_client = chromadb.Client()
+                        self.collection = self.create_collection()
+                        print("✅ Fallback to in-memory ChromaDB successful")
+                    except Exception as final_error:
+                        print(f"❌ All recovery attempts failed: {final_error}")
+                        raise final_error
+            else:
+                raise e
 
     def create_collection(self, name = 'documents'):
-        return self.chroma_client.get_or_create_collection(name = name)
+        try:
+            return self.chroma_client.get_or_create_collection(name = name)
+        except Exception as e:
+            if "'_type'" in str(e) or "KeyError: '_type'" in str(e):
+                print(f"ChromaDB collection creation failed due to metadata corruption: {e}")
+                try:
+                    # Try to delete and recreate the collection
+                    self.chroma_client.delete_collection(name=name)
+                    return self.chroma_client.create_collection(name=name)
+                except Exception as delete_error:
+                    if "'_type'" in str(delete_error):
+                        print("⚠️ Collection deletion also failed due to metadata corruption. Skipping deletion.")
+                    # If deletion fails, the collection might not exist, just create it
+                    try:
+                        return self.chroma_client.create_collection(name=name)
+                    except Exception as create_error:
+                        print(f"❌ Final collection creation attempt failed: {create_error}")
+                        raise create_error
+            else:
+                raise e
+
+    @staticmethod
+    def force_cleanup_chromadb(chromadb_path="./cache/chromadb"):
+        """Force cleanup of ChromaDB directory even when locked"""
+        import shutil
+        import os
+        import time
+        
+        if not os.path.exists(chromadb_path):
+            return True
+            
+        try:
+            # First try normal removal
+            shutil.rmtree(chromadb_path)
+            print(f"✅ Successfully removed ChromaDB directory: {chromadb_path}")
+            return True
+        except OSError as e:
+            if "Device or resource busy" in str(e) or "being used by another process" in str(e):
+                print(f"⚠️ ChromaDB directory is locked: {e}")
+                print("💡 Suggestion: Stop your application, manually delete the 'cache/chromadb' folder, then restart.")
+                return False
+            else:
+                raise e
 
 
     def add_documents(self, data_df: DataFrame):
