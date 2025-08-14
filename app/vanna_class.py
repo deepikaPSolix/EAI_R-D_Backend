@@ -3,21 +3,55 @@ from typing import Tuple, Union
 from flask import current_app
 from vanna.chromadb import ChromaDB_VectorStore
 from vanna.openai import OpenAI_Chat
+from vanna.ollama import Ollama
 import pandas as pd
 import plotly
-
+import tiktoken
 from app.db_utils import open_db_connection
 
-class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
+
+# class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
+#     document_store = {}
+#     def __init__(self,
+#         config = {
+#             "api_key": os.getenv("OPENAI_API_KEY"),
+#             "model": "gpt-4o",
+#             "path": "../vanna-chroma"
+#         }):
+#         ChromaDB_VectorStore.__init__(self, config=config)
+#         OpenAI_Chat.__init__(self, config=config)
+
+class MyVanna(Ollama, ChromaDB_VectorStore):
+
+    # def count_tokens_for_model(self, text: str) -> int:
+    #     MODEL_NAME = "gpt-4o"
+    #     encoding = tiktoken.encoding_for_model(MODEL_NAME)
+    #     return len(encoding.encode(text))
+    
     document_store = {}
-    def __init__(self,
+    def __init__(self, 
         config = {
-            "api_key": os.getenv("OPENAI_API_KEY"),
-            "model": "gpt-4o",
+            "ollama_host": os.getenv("OLLAMA_HOST", "http://192.168.1.116:11434"),
+            "model": "deepseek-r1:14b",
             "path": "../vanna-chroma"
         }):
         ChromaDB_VectorStore.__init__(self, config=config)
-        OpenAI_Chat.__init__(self, config=config)
+        Ollama.__init__(self, config=config)
+
+    # def chat_completion(self, messages, **kwargs):
+    #     """
+    #     Wrapper kept only for legacy code that still expects
+    #     `self.chat_completion(messages)["content"]`.
+
+    #     Under the hood it just forwards to `submit_prompt()` and wraps the
+    #     returned string in the tiny dict old callers expect.
+    #     """
+    #     content = self.submit_prompt(messages, **kwargs)
+
+    #     # Count tokens in the LLM response
+    #     tokens = self.count_tokens_for_model(content)
+    #     current_app.logger.info(f"RESPONSE TOKENS FROM LLM: {tokens}")
+    #     return {"content": content}
 
     def chat_completion(self, messages, **kwargs):
         """
@@ -29,6 +63,26 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
         """
         return {"content": self.submit_prompt(messages, **kwargs)}
 
+    def split_document_into_chunks(self, document: str, max_chunk_size: int = 500) -> List[str]:
+        """
+        Splits a document into chunks based on max_chunk_size (in characters).
+        You can enhance this to split by section, paragraph, or token count.
+        """
+        chunks = []
+        words = document.split()
+        current_chunk = []
+
+        for word in words:
+            if sum(len(w) + 1 for w in current_chunk) + len(word) + 1 > max_chunk_size:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = []
+            current_chunk.append(word)
+
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+
+        return chunks
+    
     def add_document(self, db_id, doc_id):
         MyVanna.document_store[db_id] = doc_id
 
@@ -131,6 +185,11 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
 
         message_log.append(self.user_message(question))
         current_app.logger.info(f"from VANNA : {message_log}")
+
+        # Count tokens in the message log
+        # text = message_log
+        # tokens = self.count_tokens_for_model(text)
+        # current_app.logger.info(f"Tokens in the string: {tokens}")
 
         return message_log
     

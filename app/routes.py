@@ -240,15 +240,25 @@ def train_vanna_doc():
             file.save(file_path)
 
             data = parse_file_data_only(file_path)
+
+            # Split document into chunks
+            ids = []
+            for i, chunk in enumerate(vn.split_document_into_chunks(data["data"], max_chunk_size=500)):
+                res = vn.train(documentation=chunk)
+                vn.add_document(db_id=res, doc_id=f"{data['file_name']}#chunk-{i}")
+                ids.append(res)
+
+            current_app.logger.info(f"✅ Added document chunks {len(ids)} chunks for {data['file_name']}")
         
-            res = vn.train(documentation=data["data"])
-            vn.add_document(db_id=res, doc_id=data["file_name"])
-            current_app.logger.info(f"✅ Added documentation to vanna chroma:\n{res}\n")
+            # res = vn.train(documentation=data["data"])
+            # vn.add_document(db_id=res, doc_id=data["file_name"])
+            # current_app.logger.info(f"✅ Added documentation to vanna chroma:\n{res}\n")
 
         return jsonify({"ids": [res]}), 202
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
     
 @main.route('/vanna/train/ddl', methods=["POST"])
 def train_vanna_ddl():
