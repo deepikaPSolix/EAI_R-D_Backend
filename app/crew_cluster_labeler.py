@@ -186,16 +186,13 @@ def generate_unique_label(cluster_text: str, cluster_id: int, existing_labels: s
                 verbose=True
             )
             raw_label = crew_gen.kickoff()
-            logger.info(f"Raw label output for Cluster ID {cluster_id}: {raw_label}")
             label = parse_label_output(raw_label)
         except Exception as e:
             logger.error(f"❌ Generation failed: {e}", exc_info=True)
             label = None
         valid, reason = validate_label(label, cluster_text, existing_labels)
         if valid and label and label.lower() not in existing_labels:
-            logger.info(f"Validator agent accepted label: {label!r}")
             existing_labels.add(label.lower())
-            logger.info(f"Final label for Cluster ID {cluster_id}: {label!r}")
             return label
         else:
             logger.warning(f"Validator agent rejected label: {label!r}. Reason: {reason}")
@@ -208,12 +205,10 @@ def generate_unique_label(cluster_text: str, cluster_id: int, existing_labels: s
     # Fallback: use last attempted label
     if label and isinstance(label, str) and label.strip():
         existing_labels.add(label.lower())
-        logger.info(f"Final fallback label for Cluster ID {cluster_id}: {label!r}")
         return label
     else:
         fallback_label = f"Cluster {cluster_id}"
         existing_labels.add(fallback_label.lower())
-        logger.info(f"No label generated for Cluster ID {cluster_id}. Using fallback: {fallback_label!r}")
         return fallback_label
 
 def generate_labels_parallel(clusters: list, existing_labels: set, max_workers: int = 5):
@@ -243,8 +238,6 @@ def batch_generate_cluster_labels(cluster_texts: list, batch_size: int = 4, max_
         if len(text) > 30000:
             text = text[:len(text)//2]
         clusters.append((text, idx))
-    for text, idx in clusters:
-        logger.info(f"Cluster {idx} text length: {len(text)}")
     results = {}
     total = len(clusters)
     for start in range(0, total, batch_size):

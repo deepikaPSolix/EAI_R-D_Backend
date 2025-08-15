@@ -387,17 +387,13 @@ class GraphFiles():
             seed_query_parts = []
             for seed_id in seed_str_ids:
                 try:
-                    # Check if it's a numeric ID
                     int(seed_id)
-                    # If numeric, query by idx
                     seed_query_parts.append(f"c.idx = {seed_id}")
                 except (ValueError, TypeError):
-                    # If string ID, query by original_id
                     seed_query_parts.append(f"c.original_id = '{seed_id}'")
             
             seed_query = " OR ".join(seed_query_parts)
             if not seed_query_parts:
-                # Fallback if no valid queries could be constructed
                 return []
                 
             q = f"""
@@ -408,28 +404,22 @@ class GraphFiles():
             """
             result = graph.query(q)
             
-            # Process results, using original_id if available
             valid_results = []
             
-            # Validate indices before returning
             max_idx = len(self.all_chunks) - 1 if self.all_chunks else -1
             
             for r in result.result_set:
-                idx = int(r[0])  # This is the numeric ID
-                original_id = r[3] if len(r) > 3 else str(idx)  # Use original_id if available
+                idx = int(r[0])
+                original_id = r[3] if len(r) > 3 else str(idx)
                 
-                # Try to convert original_id to int if it was originally numeric
                 try:
                     idx_to_use = int(original_id)
                 except ValueError:
-                    # For combined graph nodes (like "8_6"), keep as string
                     idx_to_use = original_id
                 
-                # Add to results if within valid range
                 if isinstance(idx_to_use, int) and (max_idx == -1 or idx_to_use <= max_idx):
                     valid_results.append({"idx": idx_to_use, "text": r[1], "source": r[2]})
                 elif isinstance(idx_to_use, str):
-                    # For string IDs, include without index validation
                     valid_results.append({"idx": idx_to_use, "text": r[1], "source": r[2]})
                 else:
                     current_app.logger.warning(f"⚠️ Graph returned out-of-range index: {idx_to_use} (max valid: {max_idx})")
@@ -443,7 +433,7 @@ class GraphFiles():
 
     def get_main_node_label_from_url(self, url):
         netloc = urlparse(url).netloc
-        if netloc.startswith("www."):
+        if (netloc.startswith("www.")):
             netloc = netloc[4:]
         return netloc.split('.')[0].capitalize()
 
@@ -462,9 +452,7 @@ class GraphFiles():
             cluster = data.get("cluster", -1)
             clusters[cluster].append(node)
 
-        # current_app.logger.info(f"All clusters: {[(c, len(n)) for c, n in clusters.items()]}")
         sorted_clusters = sorted(clusters.items(), key=lambda x: len(x[1]), reverse=True)
-        # current_app.logger.info(f"📊 Cluster sizes: {[(c, len(n)) for c, n in sorted_clusters]}")
 
         MAX_CLUSTERS = 8
         filtered_clusters = {
@@ -502,7 +490,6 @@ class GraphFiles():
                     formatted.append(line.strip())
             return "<br>".join(formatted)
 
-        # Parallel label generation for clusters
         cluster_texts = []
         cluster_ids = []
         for cluster_id, nodes in clusters.items():
@@ -511,7 +498,6 @@ class GraphFiles():
             cluster_text = "\n".join([get_clean_text(G_nx, node) for node in nodes])
             cluster_texts.append(cluster_text)
             cluster_ids.append(cluster_id)
-        # Generate all labels in parallel (with improved duplicate handling)
         labels_dict = batch_generate_cluster_labels(cluster_texts, max_workers=5)
         all_labels = {}
         for idx, cluster_id in enumerate(cluster_ids):
@@ -549,7 +535,6 @@ class GraphFiles():
         net.from_nx(G_cleaned)
         net.repulsion(node_distance=150, central_gravity=0.3)
 
-        # current_app.logger.info(f"✅ Render complete. Cluster labels: {list(all_labels.values())}")
         return net.generate_html()
     def store_cluster_label_to_db(self, cluster_id: int, label: str):
         try:
@@ -641,12 +626,10 @@ class GraphFiles():
                 chunk["text"] for chunk in self.all_chunks if chunk["text"]
             ])
             
-            # Store the combined graph in Redis for efficient graph traversal
             redis_store = GraphRedisStorage(session_id=self.session_id)
             redis_store.store_graph(combined_G)
             current_app.logger.info(f"Stored combined clusters in session-specific RedisGraph '{redis_store.graph_name}'")
             
-            # Store chunks in ChromaDB for efficient vector retrieval
             self.store_chunks_in_chroma()
             current_app.logger.info(f"Stored combined clusters in session-specific ChromaDB '{self.collection_name}'")
 
@@ -696,71 +679,6 @@ class GraphFiles():
             net.repulsion(node_distance=150, central_gravity=0.3)
             return net.generate_html()
 
-    # def generate_cluster_label(self, cluster_text: str, cluster_id: int) -> str:
-    #     conn = psycopg2.connect(dns)
-    #     cur = conn.cursor()
-
-    #     try:
-    #         cur.execute("""
-    #             SELECT label FROM cluster_labels
-    #             WHERE graph_id = %s AND cluster_id = %s
-    #         """, (self.graph_id, cluster_id))
-    #         row = cur.fetchone()
-    #         if row and row[0]:
-    #             label = row[0].strip()
-    #             current_app.logger.info(f"🟢 Using cached label for cluster {cluster_id}: {label}")
-    #             return label
-
-    #         cur.execute("""
-    #             SELECT label FROM cluster_labels
-    #             WHERE graph_id = %s
-    #         """, (self.graph_id,))
-    #         existing_labels = [r[0].strip() for r in cur.fetchall() if r[0]]
-    #         normalized_existing = {label.lower() for label in existing_labels}
-
-    #         if not cluster_text.strip():
-    #             label = f"Cluster {cluster_id}"
-    #             current_app.logger.warning(f"⚠️ Cluster {cluster_id} is empty. Using default label.")
-    #         else:
-    #             prompt = f"""
-    #                     You are an expert language model tasked with labeling semantic clusters in a knowledge graph.
-    #                     🧠 Cluster #{cluster_id} Content:
-    #                     {cluster_text.strip()}
-    #                     🆕 Existing Label:{existing_labels}
-    #                     Each cluster is a group of related topics or concepts. Your goal is to generate a **clear, concise, and completely Unique Label** (2–3 words max) that best summarizes the main idea of the cluster **without duplicating or imitating any existing labels**.
-    #                     📌 Existing labels in this graph which are given below:
-    #                     {chr(10).join(f"- {label}" for label in sorted(existing_labels)) or 'None'}
-    #                     ❗ VERY IMPORTANT:
-    #                     - DO NOT use the same words, synonyms, or vague rephrasings of Existing Label.
-    #                     - Only return the label. Do not include explanations, punctuation, or extra text.
-    #                         """.strip()
-
-    #             response = self.llm.model.invoke(prompt).content.strip()
-    #             candidate = response or f"Cluster {cluster_id}"
-    #             normalized = candidate.lower()
-
-    #             if normalized in normalized_existing:
-    #                 current_app.logger.warning(f"⚠️ LLM returned duplicate label '{candidate}'. Using fallback.")
-    #                 label = f"Cluster {candidate}"
-    #             else:
-    #                 label = candidate
-
-    #         cur.execute("""
-    #             INSERT INTO cluster_labels (graph_id, cluster_id, label)
-    #             VALUES (%s, %s, %s)
-    #             ON CONFLICT (graph_id, cluster_id) DO UPDATE SET label = EXCLUDED.label
-    #         """, (self.graph_id, cluster_id, label))
-    #         conn.commit()
-
-    #     except Exception as e:
-    #         current_app.logger.error(f"❌ Error in label generation for cluster {cluster_id}: {str(e)}")
-    #         label = f"Cluster {cluster_id}"
-
-    #     finally:
-    #         cur.close()
-    #         conn.close()
-
-    #     return label      
     def store_chunks_in_chroma(self):
         """
         Store all chunks in ChromaDB for efficient vector retrieval.
@@ -771,20 +689,15 @@ class GraphFiles():
             return False
         
         try:
-            # No need to clear - we're using a session-specific collection
-            # Prepare data for ChromaDB
             ids = [str(uuid.uuid4()) for _ in range(len(self.all_chunks))]
             texts = [chunk["text"] for chunk in self.all_chunks]
             metadatas = []
             
-            # Create metadata for each chunk
             for i, chunk in enumerate(self.all_chunks):
-                # Extract cluster info from graph if available
                 cluster_id = -1
                 if hasattr(self, "G_nx") and self.G_nx.has_node(i):
                     cluster_id = self.G_nx.nodes[i].get("cluster", -1)
                 
-                # Ensure all metadata values are valid types (str, int, float, bool)
                 source = chunk.get("source", "No Source Available")
                 if source is None:
                     source = "No Source Available"
@@ -798,31 +711,27 @@ class GraphFiles():
                     file_names = []
                 file_names_str = ",".join(file_names) if file_names else ""
                 
-                # Create a metadata dictionary with no None values
                 metadata = {
                     "source": source,
                     "graph_id": graph_id,
                     "node_id": i,
                     "cluster_id": cluster_id,
-                    "chunk_id": str(uuid.uuid4()),  # Add unique chunk_id
-                    "file_names": file_names_str  # Convert to string to satisfy ChromaDB
+                    "chunk_id": str(uuid.uuid4()),
+                    "file_names": file_names_str
                 }
                 
-                # Double-check that no values are None
                 for key, value in list(metadata.items()):
                     if value is None:
-                        metadata[key] = ""  # Replace None with empty string
+                        metadata[key] = ""
                 
                 metadatas.append(metadata)
             
-            # Add data to the graph_chunks collection
             self.graph_collection.upsert(
                 ids=ids,
                 documents=texts,
                 metadatas=metadatas
             )
             
-            # Map IDs to original indices for retrieval
             self.chroma_id_map = {id_str: idx for idx, id_str in enumerate(ids)}
             
             current_app.logger.info(f"✅ Successfully stored {len(ids)} chunks in session-specific ChromaDB collection '{self.collection_name}'")
@@ -848,7 +757,6 @@ class GraphFiles():
         try:              
             current_app.logger.info(f"🔍 Querying current session's ChromaDB collection '{self.collection_name}' with '{query_text[:50]}...' for {n_results} results")
             
-            # Query the graph_chunks collection - use dynamic limits based on available data
             available_chunks = len(self.all_chunks) if self.all_chunks else 100
             actual_n_results = min(n_results, available_chunks)
             
@@ -857,7 +765,6 @@ class GraphFiles():
                 n_results=actual_n_results
             )
             
-            # Process results
             chunks = []
             if results and len(results["ids"]) > 0:
                 num_results = len(results["ids"][0])
@@ -881,7 +788,6 @@ class GraphFiles():
                     
                     current_app.logger.debug(f"📄 Result {i+1}: Source={source}, Cluster={cluster_id}, Distance={f'{distance:.4f}' if distance is not None else 'N/A'}")
                 
-                # Log some stats about the results
                 sources = Counter([c.get("source", "Unknown") for c in chunks])
                 clusters = Counter([c.get("cluster_id", -1) for c in chunks])
                 
@@ -907,59 +813,48 @@ class GraphFiles():
         """
         current_app.logger.info(f"📝 [START] Processing query: {query!r}")
 
-        # First check if we have any data
         if not self.all_chunks:
             current_app.logger.warning("❌ No chunks available for retrieval")
             return {"answer": "I don't have enough information.", "source": None}
 
         current_app.logger.info(f"📊 Total chunks in memory: {len(self.all_chunks)}")
 
-        # Initialize result containers
         all_relevant_chunks = []
         graph_chunks = []
         semantic_chunks = []
         source_files = set()
         
-        # Step 1: Always get semantically similar chunks from ChromaDB
         current_app.logger.info("🔍 [STEP 1] Retrieving semantically similar chunks from ChromaDB")
-        # Dynamic retrieval based on available data - no hardcoded limits
         max_chroma_results = min(len(self.all_chunks) if self.all_chunks else 50, 100)
         chroma_chunks = self.query_chroma_chunks(query, n_results=max_chroma_results)
         if chroma_chunks:
             current_app.logger.info(f"✅ Found {len(chroma_chunks)} relevant chunks from ChromaDB")
-            # Mark these as semantic retrieval
             for chunk in chroma_chunks:
                 chunk["retrieval_type"] = "semantic"
             semantic_chunks.extend(chroma_chunks)
-            # Extract source files
             for chunk in chroma_chunks:
                 if chunk.get('source'):
                     source_files.add(chunk.get('source'))
         else:
-            current_app.logger.warning("⚠️ No chunks found in ChromaDB")        # Step 2: Always perform graph-based retrieval as well for a true hybrid approach
+            current_app.logger.warning("⚠️ No chunks found in ChromaDB")
         current_app.logger.info("🔍 [STEP 2] Performing graph-based retrieval")
         self._ensure_all_chunks_are_dicts()
 
-        # Compute embedding for query
         current_app.logger.info("📊 Computing query embedding")
         q_emb = self.st_model.encode([query])[0]
 
-        # Get the most similar chunks using the embeddings
         sims = cosine_similarity([q_emb], self.all_embeddings).flatten()
-        # Dynamic seed selection - adapt based on data size, no hardcoded percentages
         total_chunks = len(self.all_chunks)
         if total_chunks <= 20:
-            k = max(3, total_chunks // 2)  # Use half for small datasets
+            k = max(3, total_chunks // 2)
         elif total_chunks <= 100:
-            k = max(10, total_chunks // 4)  # Use quarter for medium datasets
+            k = max(10, total_chunks // 4)
         else:
-            k = max(20, total_chunks // 10)  # Use 10% for large datasets
+            k = max(20, total_chunks // 10)
         seeds = sims.argsort()[-k:][::-1].tolist()
         current_app.logger.info(f"✅ Found {len(seeds)} initial seed chunks based on embedding similarity")
 
-        # Use graph to get related chunks
         current_app.logger.info(f"🔍 Expanding graph with depth=2 from {len(seeds)} seed nodes")
-        # Dynamic expansion limit - scale with available data
         expansion_limit = max(30, min(total_chunks, total_chunks // 3))
         expanded = self._redisgraph_expand(seeds, max_depth=2, limit=expansion_limit)
         current_app.logger.info(f"✅ Graph expansion found {len(expanded)} additional connected chunks")
@@ -969,9 +864,8 @@ class GraphFiles():
             if e["idx"] not in combined_idxs:
                 combined_idxs.append(e["idx"])
         
-        current_app.logger.info(f"📊 Total unique graph nodes after expansion: {len(combined_idxs)}")        # Create the expanded chunks list
+        current_app.logger.info(f"📊 Total unique graph nodes after expansion: {len(combined_idxs)}")
         for idx in combined_idxs:
-            # Check if the index is valid for self.all_chunks
             if idx < 0 or idx >= len(self.all_chunks):
                 current_app.logger.warning(f"⚠️ Graph returned invalid node index: {idx} (max index: {len(self.all_chunks)-1})")
                 continue
@@ -981,57 +875,46 @@ class GraphFiles():
                 "text": cu.get("text", ""),
                 "source": cu.get("source", "No Source Available"),
                 "graph_node_idx": idx,
-                "retrieval_type": "graph"  # Mark as graph-based retrieval
+                "retrieval_type": "graph"
             }
             graph_chunks.append(chunk)
             if chunk.get('source'):
-                source_files.add(chunk.get('source'))# Step 3: Merge and deduplicate chunks from both retrieval methods
+                source_files.add(chunk.get('source'))
         current_app.logger.info("🔍 [STEP 3] Merging and deduplicating chunks")
         current_app.logger.info(f"📊 Before deduplication: {len(graph_chunks)} graph chunks, {len(semantic_chunks)} semantic chunks")
         
-        # Combine all chunks
         all_chunks_combined = graph_chunks + semantic_chunks
 
-        # Deduplicate with graph priority
         all_relevant_chunks = deduplicate_chunks(all_chunks_combined, prioritize_graph=True)
 
         current_app.logger.info(f"📊 After deduplication: {len(all_relevant_chunks)} unique chunks")
         current_app.logger.info(f"📊 Breakdown: {len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'graph'])} graph chunks, {len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'semantic'])} semantic chunks")
 
-        # Step 4: Re-rank combined chunks for better context selection
         current_app.logger.info("🔍 [STEP 4] Re-ranking chunks based on relevance to query")
         texts = [c["text"] for c in all_relevant_chunks]
         if texts:
-            # Re-encode for accurate ranking
             current_app.logger.info("📊 Computing similarity scores for re-ranking")
             q_emb = self.st_model.encode([query])[0]
             chunk_embs = self.st_model.encode(texts)
             sims = cosine_similarity([q_emb], chunk_embs).flatten()
 
-            # Get top chunks based on similarity ranking
-            # Dynamic context selection - adapt based on available data and query complexity
             available_chunks = len(all_relevant_chunks)
             
-            # Determine optimal chunk count based on query type and available data
             query_words = len(query.split())
             is_complex_query = query_words > 10 or any(word in query.lower() for word in ['analyze', 'compare', 'detailed', 'comprehensive', 'all', 'every', 'list'])
             
             if is_complex_query:
-                # For complex queries, use more context
                 max_context_chunks = min(available_chunks, max(20, available_chunks // 2))
             else:
-                # For simple queries, use moderate context
                 max_context_chunks = min(available_chunks, max(10, available_chunks // 3))
                 
             top_k = max_context_chunks
             top_indices = np.argsort(sims)[::-1][:top_k]
             current_app.logger.info(f"📊 Selected top {len(top_indices)} chunks for context (query complexity: {'high' if is_complex_query else 'normal'})")
 
-            # Prepare comprehensive context from top chunks
             current_app.logger.info("📝 Building context for LLM prompt")
             context_units = []
             
-            # Enhanced context building with intelligent data extraction
             for i in top_indices:
                 chunk = all_relevant_chunks[i]
                 src = chunk.get("source", "Unknown Source")
@@ -1040,144 +923,114 @@ class GraphFiles():
                 
                 current_app.logger.info(f"📄 Including chunk from {src} (type: {retrieval_type}, similarity: {similarity_score:.4f})")
                 
-                # Smart context enhancement based on content patterns
                 chunk_text = chunk['text']
                 
-                # For queries involving IDs, numbers, or specific data points, enhance context
                 if any(pattern in query.lower() for pattern in ['id', 'number', 'amount', 'date', 'order']):
-                    # Try to extract and highlight important patterns from filenames
                     import re
                     filename_base = os.path.splitext(os.path.basename(src))[0]
                     
-                    # Extract numbers/IDs from filename
                     numbers_in_filename = re.findall(r'\d+', filename_base)
                     if numbers_in_filename:
                         chunk_text = f"[DOCUMENT: {filename_base} - Contains: {', '.join(numbers_in_filename)}]\n{chunk_text}"
                 
-                # Build context with source attribution
-                context_units.append(f"**Source Document:** {os.path.basename(src)}\n**Content:** {chunk_text}")
+                import re
+                url_pattern = r"^https?://"
+                if re.match(url_pattern, src):
+                    context_units.append(f"**Source Document:** {src}\n**Content:** {chunk_text}")
+                else:
+                    context_units.append(f"**Source Document:** {os.path.basename(src)}\n**Content:** {chunk_text}")
                 
                 if src:
                     source_files.add(src)
 
-            # Join all contexts
             context = "\n---\n".join(context_units)
             current_app.logger.info(f"📊 Final context built with {len(context_units)} chunks")
-        else:
+        else: 
             current_app.logger.warning("⚠️ No text content found in chunks")
             context = ""
-            top_indices = []        # No relevant information found
-        if not context:
-            current_app.logger.warning("❌ No relevant context found for the query")
-            return {"answer": "I don't have enough information to answer that question.", "source": None}
+            top_indices = []
+        top_sources = []
+        seen_sources = set()
+        source_reasons = {}
+        for i in top_indices:
+            chunk = all_relevant_chunks[i]
+            src = chunk.get("source", "")
+            if src and src not in seen_sources:
+                top_sources.append(src)
+                seen_sources.add(src)
+                reason = {
+                    "picked_text": chunk["text"],
+                    "similarity_score": float(sims[i]),
+                    "retrieval_type": chunk.get("retrieval_type", "unknown"),
+                    "query": query
+                }
+                source_reasons[src] = reason
+                current_app.logger.info(f"🔎 Source picked: {src} | Reason: {reason}")
 
-        # Convert source files to a list for the prompt
-        source_file_list = list(source_files)
-        current_app.logger.info(f"📊 Sources referenced: {len(source_file_list)} unique files")
-        
-        # Create intelligent prompt with comprehensive instructions
+        unique_sources = len(top_sources)
+
         current_app.logger.info("🔍 [STEP 5] Building LLM prompt with context")
-        
-        # Analyze query to determine processing approach
-        query_lower = query.lower()
-        
-        # Detect if this is a comprehensive extraction query
-        is_extraction_query = any(keyword in query_lower for keyword in [
-            'list', 'all', 'every', 'each', 'numbers', 'ids', 'names', 'items', 
-            'show', 'display', 'find', 'identify', 'extract', 'get', 'provide'
-        ])
-        
-        # Detect if this requires detailed analysis
-        is_analysis_query = any(keyword in query_lower for keyword in [
-            'analyze', 'compare', 'explain', 'describe', 'detail', 'comprehensive',
-            'summary', 'overview', 'breakdown', 'relationship', 'pattern'
-        ])
-        
-        # Count available documents/sources
-        unique_sources = len(source_files)
-        
-        if is_extraction_query or is_analysis_query or unique_sources > 5:
-            prompt = (
+        prompt = (
                 "You are an expert document analyst. Your task is to thoroughly examine ALL provided context and extract EVERY relevant piece of information that answers the user's question.\n\n"
-                f"📘 Context from {unique_sources} document sources:\n{context}\n\n"
-                f"❓ User Query: {query}\n\n"
+                f" Context from {unique_sources} document sources:\n{context}\n\n"
+                f" User Query: {query}\n\n"
                 "**CRITICAL INSTRUCTIONS - READ CAREFULLY:**\n"
-                "🔍 COMPREHENSIVE ANALYSIS REQUIRED:\n"
+                " COMPREHENSIVE ANALYSIS REQUIRED:\n"
                 "- Examine EVERY SINGLE document excerpt in the context above\n"
                 "- Do NOT stop after finding just a few items - search through ALL content\n"
                 "- Look for patterns, numbers, IDs, names, dates, or ANY data points relevant to the query\n"
                 "- If the query asks for a list or collection, find ALL instances across ALL documents\n"
                 "- Process each document section systematically and thoroughly\n\n"
-                "📊 PROCESSING APPROACH:\n"
+                " PROCESSING APPROACH:\n"
                 "- Scan through each source document methodically\n"
                 "- Cross-reference information between documents\n"
                 "- Consolidate findings from multiple sources\n"
                 "- Present information in a clear, organized manner\n"
                 "- Include quantitative details when available (counts, amounts, percentages, etc.)\n\n"
-                "⚠️ QUALITY STANDARDS:\n"
+                " QUALITY STANDARDS:\n"
                 "- Be exhaustive in your search - don't miss any relevant data\n"
                 "- Maintain accuracy - only include information explicitly stated in the context\n"
                 "- If information spans multiple documents, synthesize it comprehensively\n"
                 "- For numerical data, include specific values, not approximations\n"
-                "- If you cannot find sufficient information, respond with: [NO_ANSWER]\n\n"
+                "- If you cannot find sufficient information, respond only with the context information with the related answer.\n\n"
                 "🎯 OUTPUT REQUIREMENTS:\n"
                 "- Provide complete, thorough responses\n"
                 "- Structure your answer logically\n"
                 "- Include all relevant findings, not just highlights\n"
-                "- Be comprehensive yet concise"
+                "- Be comprehensive.\n\n"
+                "- At the end of your answer, add a line: Sources Used: <comma-separated list of source document names you used for your answer, up to 3>"
             )
-        else:
-            prompt = (
-                "You are a helpful document assistant. Use the provided context to answer the user's question accurately and completely.\n\n"
-                f"📘 Context:\n{context}\n\n"
-                f"❓ Question: {query}\n\n"
-                "**Instructions:**\n"
-                "- Use only information from the provided context\n"
-                "- Provide accurate and relevant information\n"
-                "- If the question requires multiple pieces of information, include all of them\n"
-                "- Be thorough but concise\n"
-                "- If there is insufficient information, respond with: [NO_ANSWER]"
-            )
-            
-        current_app.logger.info(f"📝 Prompt built with {len(context)} characters of context ({unique_sources} sources)")
-        current_app.logger.info(f"📋 Query analysis: extraction={is_extraction_query}, analysis={is_analysis_query}, sources={unique_sources}")
-        current_app.logger.info(f"📝 Prompt built with {len(context)} characters of context")
-
         try:
-            # Generate the response
             current_app.logger.info("🔍 [STEP 6] Generating response with LLM")
             current_app.logger.info(f"📝 Sending comprehensive prompt with {len(prompt)} characters to LLM")
-            
-            # Log context preview for debugging
-            context_preview = context[:800] + "..." if len(context) > 800 else context
-            current_app.logger.info(f"📄 Context preview: {context_preview}")
-            
             raw_response = self.llm.model.invoke(prompt)
             response_text = str(raw_response.content).strip()
             current_app.logger.info(f"✅ LLM generated a response of {len(response_text)} characters")
-            current_app.logger.info(f"📝 LLM Response: {response_text}")
 
             if "[NO_ANSWER]" in response_text:
                 current_app.logger.warning("⚠️ LLM indicated insufficient information")
                 return {"answer": "I don't have enough information.", "source": None}
 
-            # Get primary source for attribution
-            primary_source = None
-            if source_file_list:
-                primary_source = source_file_list[0]
-                
-            # Get additional context about source if it's from top chunks
+            import re
+            sources_used = []
+            match = re.search(r"Sources Used:\s*(.*)", response_text)
+            if match:
+                sources_line = match.group(1)
+                sources_used = [s.strip() for s in sources_line.split(",") if s.strip()]
+                sources_used = sources_used[:3]
+                response_text = re.sub(r"Sources Used:.*", "", response_text).strip()
+            else:
+                sources_used = top_sources[:3]
+
+            primary_source = sources_used[0] if sources_used else None
             if len(top_indices) > 0:
                 top_chunk = all_relevant_chunks[top_indices[0]]
                 if top_chunk.get('source'):
                     primary_source = top_chunk.get('source')
                     current_app.logger.info(f"📄 Primary source set to: {primary_source}")
 
-            # Include retrieval stats in response for debugging/analysis
             graph_chunk_count = len([c for c in all_relevant_chunks if c.get("retrieval_type") == "graph"])
             semantic_chunk_count = len([c for c in all_relevant_chunks if c.get("retrieval_type") == "semantic"])
-            
-            # Log detailed performance metrics
             current_app.logger.info(f"""
             📊 [PERFORMANCE METRICS]
             - Total chunks considered: {len(all_relevant_chunks)}
@@ -1187,26 +1040,15 @@ class GraphFiles():
             - Response length: {len(response_text)} characters
             """)
 
-            # Get ALL unique sources by similarity - no artificial limits
-            top_sources = []
-            seen_sources = set()
-            for i in top_indices:
-                chunk = all_relevant_chunks[i]
-                src = chunk.get("source", "")
-                if src and src not in seen_sources:
-                    top_sources.append(src)
-                    seen_sources.add(src)
-                # No break - include ALL unique sources for comprehensive results
-
             return {
                 "answer": response_text,
-                "sources": top_sources,  # All unique sources, no limits
+                "sources": sources_used,
                 "stats": {
                     "total_chunks": len(all_relevant_chunks),
                     "graph_chunks": graph_chunk_count,
                     "semantic_chunks": semantic_chunk_count,
                     "source_files": len(source_files),
-                    "unique_sources": len(top_sources)
+                    "unique_sources": len(sources_used)
                 }
             }
 

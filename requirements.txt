@@ -56,3 +56,4 @@ uv>=0.1.32
 python-Levenshtein
 crewai
 crewai_tools
+nest-asyncio
