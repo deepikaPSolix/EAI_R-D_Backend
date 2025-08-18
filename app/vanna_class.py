@@ -7,9 +7,36 @@ from vanna.ollama import Ollama
 import pandas as pd
 import plotly
 import tiktoken
+from app.llm_model import LLMModel
 from app.db_utils import open_db_connection
+from vanna.base import VannaBase
 
+class LLMModel_Chat(VannaBase):
+    def __init__(self, model_source=None, config=None):
+        VannaBase.__init__(self, config=config)
+        self.model = LLMModel(model_source).model
 
+    def system_message(self, message: str) -> any:
+        return {"role": "system", "content": message}
+
+    def user_message(self, message: str) -> any:
+        return {"role": "user", "content": message}
+
+    def assistant_message(self, message: str) -> any:
+        return {"role": "assistant", "content": message}
+
+    def submit_prompt(self, prompt, **kwargs) -> str:
+        if prompt is None:
+            raise Exception("Prompt is None")
+
+        if len(prompt) == 0:
+            raise Exception("Prompt is empty")
+
+        response = self.model.invoke(prompt)
+        
+        return response.content
+
+## OPENAI Vanna
 # class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
 #     document_store = {}
 #     def __init__(self,
@@ -21,22 +48,31 @@ from app.db_utils import open_db_connection
 #         ChromaDB_VectorStore.__init__(self, config=config)
 #         OpenAI_Chat.__init__(self, config=config)
 
-class MyVanna(Ollama, ChromaDB_VectorStore):
-
-    # def count_tokens_for_model(self, text: str) -> int:
-    #     MODEL_NAME = "gpt-4o"
-    #     encoding = tiktoken.encoding_for_model(MODEL_NAME)
-    #     return len(encoding.encode(text))
-    
+## Any LLM Vanna
+class MyVanna(LLMModel_Chat, ChromaDB_VectorStore):
     document_store = {}
-    def __init__(self, 
-        config = {
-            "ollama_host": os.getenv("OLLAMA_HOST", "http://192.168.1.116:11434"),
-            "model": "deepseek-r1:14b",
-            "path": "../vanna-chroma"
-        }):
+    def __init__(self, model_source = "together", config={"path": "../vanna-chroma"}):
+        LLMModel_Chat.__init__(self, model_source)
         ChromaDB_VectorStore.__init__(self, config=config)
-        Ollama.__init__(self, config=config)
+
+
+## Ollama Vanna
+# class MyVanna(Ollama, ChromaDB_VectorStore):
+#     # def count_tokens_for_model(self, text: str) -> int:
+#     #     MODEL_NAME = "gpt-4o"
+#     #     encoding = tiktoken.encoding_for_model(MODEL_NAME)
+#     #     return len(encoding.encode(text))
+#     document_store = {}
+#     def __init__(self, 
+#         config = {
+#             "ollama_host": os.getenv("OLLAMA_HOST", "http://192.168.1.116:11434"),
+#             "model": "deepseek-r1:14b",
+#             "path": "../vanna-chroma"
+#         }):
+#         ChromaDB_VectorStore.__init__(self, config=config)
+#         Ollama.__init__(self, config=config)
+
+## -- Common Methods --
 
     # def chat_completion(self, messages, **kwargs):
     #     """
@@ -63,7 +99,7 @@ class MyVanna(Ollama, ChromaDB_VectorStore):
         """
         return {"content": self.submit_prompt(messages, **kwargs)}
 
-    def split_document_into_chunks(self, document: str, max_chunk_size: int = 500) -> List[str]:
+    def split_document_into_chunks(self, document: str, max_chunk_size: int = 500) -> list[str]:
         """
         Splits a document into chunks based on max_chunk_size (in characters).
         You can enhance this to split by section, paragraph, or token count.

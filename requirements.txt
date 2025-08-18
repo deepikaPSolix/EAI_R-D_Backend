@@ -55,3 +55,6 @@ vanna
 biomcp-python>=0.1.10
 uv>=0.1.32
 python-Levenshtein
+SQLAlchemy
+ydata_profiling
+nest_asyncio

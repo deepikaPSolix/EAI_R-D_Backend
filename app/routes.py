@@ -4,6 +4,8 @@ import os
 from flask import Blueprint, current_app, jsonify, request, send_from_directory, url_for, Response
 from openai import NotFoundError
 from celery.result import AsyncResult
+import chromadb
+from chromadb.config import Settings
 from app.chroma_db import ChromaDB
 from app.graph_builder import GraphBuilder
 from app.models.doc_file import DocFile
@@ -23,6 +25,8 @@ from app.dashboard import Dashboard
 import nest_asyncio
 import pandas as pd
 import vanna
+from sqlalchemy import create_engine
+import app.data_profiling_embedding as dpe
 
 from app.hpostgres import store_in_postgres
 
@@ -212,11 +216,45 @@ def classify():
 def train_vanna_generate_doc():
     try:
         vn = MyVanna()
-        db_id = vn.train_with_fallback_doc()
-        return jsonify({"id": db_id, "status": "trained with generated metadata"}), 202
+        # Metadata
+        # db_id = vn.train_with_fallback_doc()
+        db_id="-1"
+        # Relation mapping
+        rel_map_data = profiling_embedding(vn)
+        current_app.logger.info("Relation mapping data: " + str(rel_map_data))
+        rel_map_id = vn.train(documentation=rel_map_data)
+        vn.add_document(db_id=rel_map_id, doc_id="relation_mapping")
+
+        return jsonify({"id": db_id, "relation_mapping_id": rel_map_id, "status": "trained with generated metadata"}), 202
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+def profiling_embedding(vn):
+    # create new chromadb only for embedding
+    # chroma_client = ChromaDB(collection_name="profiling_embedding")
+    chroma_client = chromadb.Client(Settings(persist_directory="./profiling_embedding", allow_reset=True))
+    chroma_client.reset()
+
+    # Create connection string
+    host = os.getenv("DB_HOST")
+    dbname = os.getenv("DB_NAME")
+    user = os.getenv("DB_USER")
+    password = os.getenv("DB_PASSWORD")
+    port = os.getenv("DB_PORT")
+    conn_str = f"postgresql+psycopg2://{user}:{password}@" \
+            f"{host}:{port}/{dbname}"
+
+    engine = create_engine(conn_str)
+    embedding_result, profiling_result = dpe.get_all_results(chroma_client, engine, limit=100)
+
+    system_prompt = f"The following is information on the columns of the tables from a database. Find the likely primary and foreign key relations between tables."
+    prompt = f"Profiling Result: {profiling_result}\n Similarity Search Result: {embedding_result}"
+    context = system_prompt + "\n" + prompt
+    
+    current_app.logger.info("Profiling embedding context:\n" + context)
+    response = vn.submit_prompt(context)
+    return response
 
 @main.route('/vanna/train/doc', methods=["POST"])
 def train_vanna_doc():
