@@ -5,6 +5,9 @@ from flask import Flask
 from celery import Celery, Task
 import logging
 
+from sentence_transformers import SentenceTransformer
+
+st_model = SentenceTransformer("all-MiniLM-L6-v2")
 logging.getLogger('LiteLLM').setLevel(logging.ERROR)
 logging.getLogger('together').setLevel(logging.ERROR)
 logging.getLogger('ppocr').setLevel(logging.ERROR)

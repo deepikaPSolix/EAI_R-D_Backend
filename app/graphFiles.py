@@ -15,6 +15,7 @@ from sentence_transformers import SentenceTransformer
 import numpy as np
 import re
 import ast
+import time
 from collections import Counter
 from urllib.parse import urlparse
 from pyvis.network import Network
@@ -84,7 +85,9 @@ def deduplicate_chunks(chunks, prioritize_graph=True):
     return unique_chunks
 class GraphFiles():
     def __init__(self):
-        self.st_model = SentenceTransformer("all-MiniLM-L6-v2")
+        # Use global/shared SentenceTransformer instance for performance
+        from app import st_model
+        self.st_model = st_model
         self.llm = LLMModel.from_together()
         self.all_chunks=None
         self.all_embeddings = None        
@@ -106,6 +109,7 @@ class GraphFiles():
         current_app.logger.info(f"🆕 Creating new session-specific ChromaDB collection: {self.collection_name}")
         # Create a new collection for this session (no need to delete anything)
         self.graph_collection = self.chroma_db.chroma_client.get_or_create_collection(name=self.collection_name)
+        current_app.logger.info(f"[GRAPHFILES] Session ID: {self.session_id}")
     
     def _ensure_all_chunks_are_dicts(self):
         """
@@ -167,14 +171,15 @@ class GraphFiles():
             text = text.strip()
 
         if source:
-            filename = os.path.splitext(os.path.basename(source))[0].lower()
+            filename = os.path.splitext(os.path.basename(source))[0]
+            current_app.logger.info(f"[GRAPHFILES] split_source_and_text: source='{source}', filename='{filename}'")
             cleaned_lines = []
             for line in text.splitlines():
                 line_lower = line.strip().lower()
+                # Strict: do not skip lines based on fuzzy filename matching
+                # Only skip if the exact filename (with all spaces) is present
                 if filename in line_lower:
-                    continue  
-                if all(part in line_lower for part in filename.split()):
-                    continue  
+                    continue
                 cleaned_lines.append(line.strip())
             text = "\n".join(cleaned_lines)
 
@@ -257,8 +262,7 @@ class GraphFiles():
         G_ig      = ig.Graph.TupleList(G_nx.edges(), directed=False)
         partition = leidenalg.find_partition(G_ig, leidenalg.ModularityVertexPartition)
 
-        # After clustering, log cluster membership counts
-        from collections import Counter
+        # After clustering, log cluster membership counts        from collections import Counter
         counts = Counter(partition.membership)
         
         for idx, com in enumerate(partition.membership):
@@ -266,12 +270,26 @@ class GraphFiles():
         current_app.logger.info("✅ Leiden partition done")        
         pg = GraphPostgresStorage(dns=dns)
         self.graph_id = pg.save_graph(G_nx)
-        current_app.logger.info(f"Saved graph {self.graph_id} to Postgres")
-
-        # Use session-specific RedisGraph storage
-        redis_store = GraphRedisStorage(session_id=self.session_id)
-        redis_store.store_graph(G_nx)
-        current_app.logger.info(f"Saved graph to RedisGraph with session ID {self.session_id}")
+        current_app.logger.info(f"Saved graph {self.graph_id} to Postgres")        # Use session-specific RedisGraph storage with optimized settings
+        redis_store = GraphRedisStorage(session_id=self.session_id, timeout=120)  # Increased timeout for large graphs
+        
+        # Store graph with optimized batching
+        start_time = time.time()
+        current_app.logger.info(f"Storing graph with {G_nx.number_of_nodes()} nodes and {G_nx.number_of_edges()} edges to RedisGraph")
+        result = redis_store.store_graph(G_nx)
+        
+        if result:
+            # Run optimization after successful storage
+            redis_store.optimize_graph()
+            # Preload cache for faster subsequent queries
+            redis_store.preload_cache()
+            # Clean up old graphs to prevent Redis from growing too large
+            deleted = redis_store.cleanup_old_graphs(max_graphs=20)
+            if deleted > 0:
+                current_app.logger.info(f"Cleaned up {deleted} old RedisGraph instances")
+        
+        elapsed = time.time() - start_time
+        current_app.logger.info(f"Saved graph to RedisGraph with session ID {self.session_id} in {elapsed:.2f} seconds")
 
         # Store chunks in ChromaDB
         self.store_chunks_in_chroma()
@@ -305,7 +323,7 @@ class GraphFiles():
         self.chunks         = [G_nx.nodes[n]["text"] for n in self.chunk_node_ids]
         self.embeddings     = self.st_model.encode(self.chunks)
 
-        return self.graph_id, G_nx    
+        return self.graph_id, G_nx      
     def load_graph_from_redis(self):
         """
         Load graph data from RedisGraph when needed. This is a fallback method
@@ -316,37 +334,53 @@ class GraphFiles():
         """
         try:
             current_app.logger.info(f"🔄 Attempting to load graph from session-specific RedisGraph {self.session_id}")
-            redis_store = GraphRedisStorage(session_id=self.session_id)
+            redis_store = GraphRedisStorage(session_id=self.session_id, timeout=60)  # Increased timeout for large graphs
             
-            # Query all nodes from the RedisGraph
-            query = "MATCH (n:Chunk) RETURN n.idx, n.text, n.source, n.cluster"
-            result = redis_store.graph.query(query)
-            
-            if not result.result_set:
-                current_app.logger.warning("⚠️ No nodes found in RedisGraph")
-                return False
-                
             # Create a new in-memory graph
             G_nx = nx.Graph()
             
-            # Add nodes to the graph
-            for row in result.result_set:
-                idx = int(row[0])
-                text = row[1]
-                source = row[2]
-                cluster = int(row[3])
-                G_nx.add_node(idx, text=text, source=source, cluster=cluster)
+            # Load nodes in batches for better memory management
+            node_count = 0
+            for node_batch in redis_store.get_nodes_in_batches(batch_size=1000):
+                if not node_batch:
+                    if node_count == 0:
+                        current_app.logger.warning("⚠️ No nodes found in RedisGraph")
+                        return False
+                    else:
+                        break
+                
+                # Add nodes to the graph
+                for node in node_batch:
+                    idx = int(node['idx'])
+                    text = node['text']
+                    source = node['source']
+                    cluster = int(node['cluster']) if node['cluster'] is not None else -1
+                    G_nx.add_node(idx, text=text, source=source, cluster=cluster)
+                    node_count += 1
+                
+                current_app.logger.debug(f"Loaded {node_count} nodes from RedisGraph")
             
-            # Query all edges from the RedisGraph
-            edge_query = "MATCH (a:Chunk)-[r:SIMILAR]->(b:Chunk) RETURN a.idx, b.idx, r.weight"
-            edge_result = redis_store.graph.query(edge_query)
+            if node_count == 0:
+                current_app.logger.warning("⚠️ No nodes found in RedisGraph")
+                return False
             
-            # Add edges to the graph
-            for row in edge_result.result_set:
-                source_idx = int(row[0])
-                target_idx = int(row[1])
-                weight = float(row[2])
-                G_nx.add_edge(source_idx, target_idx, weight=weight)
+            # Load edges in batches for better memory management
+            edge_count = 0
+            for edge_batch in redis_store.get_edges_in_batches(batch_size=5000):
+                if not edge_batch:
+                    break
+                
+                # Add edges to the graph
+                for source_idx, target_idx, weight in edge_batch:
+                    # Skip invalid edges
+                    if not G_nx.has_node(source_idx) or not G_nx.has_node(target_idx):
+                        current_app.logger.warning(f"⚠️ Skipping edge between missing nodes: {source_idx}->{target_idx}")
+                        continue
+                        
+                    G_nx.add_edge(source_idx, target_idx, weight=weight)
+                    edge_count += 1
+                
+                current_app.logger.debug(f"Loaded {edge_count} edges from RedisGraph")
             
             # Update the instance variables
             self.G_nx = G_nx
@@ -371,38 +405,107 @@ class GraphFiles():
         except Exception as e:
             current_app.logger.error(f"❌ Failed to load graph from RedisGraph: {e}", exc_info=True)
             return False
+            self.G_nx = G_nx
+            self.chunk_node_ids = list(G_nx.nodes())
+            self.all_chunks = [
+                {"text": G_nx.nodes[n].get("text", ""), "source": G_nx.nodes[n].get("source", "No Source Available")}
+                for n in self.chunk_node_ids
+            ]
+            self._ensure_all_chunks_are_dicts()
+            
+            # Load or generate embeddings
+            try:
+                self.all_embeddings = self.st_model.encode([c["text"] for c in self.all_chunks])
+                current_app.logger.info(f"✅ Successfully generated embeddings for {len(self.all_chunks)} chunks")
+            except Exception as e:
+                current_app.logger.error(f"❌ Failed to generate embeddings: {e}")
+                return False
+                
+            current_app.logger.info(f"✅ Successfully loaded graph from RedisGraph with {G_nx.number_of_nodes()} nodes and {G_nx.number_of_edges()} edges")
+            return True
+            
+        except Exception as e:
+            current_app.logger.error(f"❌ Failed to load graph from RedisGraph: {e}", exc_info=True)
+            return False    
     def _redisgraph_expand(self, seed_ids, max_depth=2, limit=20):
         if seed_ids is None or len(seed_ids) == 0:
             return []
 
         try:
-            # Use session-specific RedisGraph storage
-            store = GraphRedisStorage(session_id=self.session_id)
+            # Use session-specific RedisGraph storage with increased timeout
+            store = GraphRedisStorage(session_id=self.session_id, timeout=30)
             graph = store.graph
             
             # Convert seed IDs to strings for consistent handling
             seed_str_ids = [str(i) for i in seed_ids]
             
+            # Limit the number of seed IDs to process to avoid very large queries
+            if len(seed_str_ids) > 10:
+                current_app.logger.warning(f"⚠️ Too many seed IDs ({len(seed_str_ids)}), limiting to 10")
+                seed_str_ids = seed_str_ids[:10]
+            
             # Query using original_id property for non-numeric IDs
-            seed_query_parts = []
+            numeric_seeds = []
+            string_seeds = []
+            
             for seed_id in seed_str_ids:
                 try:
-                    int(seed_id)
-                    seed_query_parts.append(f"c.idx = {seed_id}")
+                    numeric_seeds.append(int(seed_id))
                 except (ValueError, TypeError):
-                    seed_query_parts.append(f"c.original_id = '{seed_id}'")
+                    string_seeds.append(seed_id)
             
-            seed_query = " OR ".join(seed_query_parts)
-            if not seed_query_parts:
+            # Optimize query based on seed types
+            if not numeric_seeds and not string_seeds:
                 return []
                 
-            q = f"""
-            MATCH (c:Chunk)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
-            WHERE {seed_query}
-            RETURN DISTINCT x.idx, x.text, x.source, x.original_id
-            LIMIT {limit}
-            """
-            result = graph.query(q)
+            # Use parameters for query to prevent injection and improve caching
+            params = {}
+            
+            # Build efficient query with parameters
+            if numeric_seeds and string_seeds:
+                # Mixed case: both numeric and string IDs
+                params['numeric_ids'] = numeric_seeds
+                params['string_ids'] = string_seeds
+                
+                q = f"""
+                MATCH (c:Chunk)
+                WHERE c.idx IN $numeric_ids OR c.original_id IN $string_ids
+                MATCH (c)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
+                RETURN DISTINCT x.idx, x.text, x.source, x.original_id
+                LIMIT {limit}
+                """
+            elif numeric_seeds:
+                # Only numeric IDs
+                params['numeric_ids'] = numeric_seeds
+                
+                q = f"""
+                MATCH (c:Chunk)
+                WHERE c.idx IN $numeric_ids
+                MATCH (c)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
+                RETURN DISTINCT x.idx, x.text, x.source, x.original_id
+                LIMIT {limit}
+                """
+            else:
+                # Only string IDs
+                params['string_ids'] = string_seeds
+                
+                q = f"""
+                MATCH (c:Chunk)
+                WHERE c.original_id IN $string_ids
+                MATCH (c)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
+                RETURN DISTINCT x.idx, x.text, x.source, x.original_id
+                LIMIT {limit}
+                """
+              # Execute the query with parameters
+            start_time = time.time()
+            result = store.query_with_timeout(q, params=params, timeout=30)  # Use timeout-protected query
+            query_time = time.time() - start_time
+            
+            if result is None:
+                current_app.logger.warning("Graph expansion query timed out, returning empty results")
+                return []
+                
+            current_app.logger.debug(f"Graph expansion query completed in {query_time:.2f} seconds")
             
             valid_results = []
             

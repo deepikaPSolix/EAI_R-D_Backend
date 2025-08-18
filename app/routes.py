@@ -903,13 +903,15 @@ def docupload():
             
             file_path = os.path.join(current_app.config['GRAPH_DOC_UPLOAD'], file.filename)
             file.save(file_path)
+            current_app.logger.info(f"[UPLOAD] Saved file: '{file.filename}' at '{file_path}'")  # <-- ADD THIS
             saved_files.append(file_path)
             filenames.append(file.filename)
         global chunks
         chunks = []
         for file_path in saved_files:
             filename = os.path.basename(file_path)
-            chunk_list = [f"{filename}||{chunk.text}" for chunk in parse_graph_file(file_path)]  
+            current_app.logger.info(f"[CHUNK] Using filename for chunking: '{filename}'")  # <-- ADD THIS
+            chunk_list = [f"{filename}||{chunk.text}" for chunk in parse_graph_file(file_path)]
             chunks.extend(chunk_list)
         current_app.logger.info("CHUNKS CREATED :)")
         # current_app.logger.info(f"CHUNKS from FileUploads : {chunks[0]}")
@@ -987,9 +989,7 @@ def graph_query():
 
 @main.route('/graph/download/<path:filename>')
 def download_graph_file(filename):
-    """
-    Serve any file from GRAPH_DOC_UPLOAD inline (PDFs open in browser).
-    """
+    current_app.logger.info(f"[DOWNLOAD] Requested filename: '{filename}'")  # <-- ADD THIS
     return send_from_directory(
         current_app.config['GRAPH_DOC_UPLOAD'],
         filename,
