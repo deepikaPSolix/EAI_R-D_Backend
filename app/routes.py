@@ -228,43 +228,69 @@ def train_vanna_generate_doc():
     try:
         vn = MyVanna()
         # Metadata
-        # db_id = vn.train_with_fallback_doc()
-        db_id="-1"
+        # fallback_id = vn.train_with_fallback_doc()
+        # rel_map_id = "-1"
         # Relation mapping
+        fallback_id="-1"
         rel_map_data = profiling_embedding(vn)
+    except Exception as e:
+        current_app.logger.error("Profiling embedding error: " + str(e))
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    try:
         current_app.logger.info("Relation mapping data: " + str(rel_map_data))
         rel_map_id = vn.train(documentation=rel_map_data)
         vn.add_document(db_id=rel_map_id, doc_id="relation_mapping")
 
-        return jsonify({"id": db_id, "relation_mapping_id": rel_map_id, "status": "trained with generated metadata"}), 202
+        return jsonify({"id": fallback_id, "relation_mapping_id": rel_map_id, "status": "trained with generated metadata"}), 202
     except Exception as e:
-        current_app.logger.error(str(e))
+        current_app.logger.error("Training and add document error: " + str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     
+def safe_rollback(engine):
+    try:
+        with engine.connect() as conn:
+            if conn.in_transaction():
+                conn.rollback()
+    except Exception as e:
+        current_app.logger.info(f"safe_rollback: {e}")
+
 def profiling_embedding(vn):
     # create new chromadb only for embedding
-    # chroma_client = ChromaDB(collection_name="profiling_embedding")
-    chroma_client = chromadb.Client(Settings(persist_directory="./profiling_embedding", allow_reset=True))
-    chroma_client.reset()
+    try:
+        # chroma_client = ChromaDB(collection_name="profiling_embedding")
+        chroma_client = chromadb.Client(Settings(persist_directory="./profiling_embedding", allow_reset=True))
+        chroma_client.reset()
 
-    # Create connection string
-    host = os.getenv("DB_HOST")
-    dbname = os.getenv("DB_NAME")
-    user = os.getenv("DB_USER")
-    password = os.getenv("DB_PASSWORD")
-    port = os.getenv("DB_PORT")
-    conn_str = f"postgresql+psycopg2://{user}:{password}@" \
-            f"{host}:{port}/{dbname}"
+        # Create connection string
+        host = os.getenv("DB_HOST")
+        dbname = os.getenv("DB_NAME")
+        user = os.getenv("DB_USER")
+        password = os.getenv("DB_PASSWORD")
+        port = os.getenv("DB_PORT")
+        conn_str = f"postgresql+psycopg2://{user}:{password}@" \
+                f"{host}:{port}/{dbname}"
 
-    engine = create_engine(conn_str)
-    embedding_result, profiling_result = dpe.get_all_results(chroma_client, engine, limit=100)
+        engine = create_engine(conn_str)
+    except Exception as e:
+        current_app.logger.error(f"Error creating chroma client or engine: {e}", exc_info=True)
+        raise e
+    try:
+        embedding_result, profiling_result = dpe.get_all_results(chroma_client, engine, limit=100)
+    except Exception as e:
+        current_app.logger.error(f"Error in get_all_results: {e}", exc_info=True)
+        safe_rollback(engine)
+        raise e
 
-    system_prompt = f"The following is information on the columns of the tables from a database. Find the likely primary and foreign key relations between tables."
-    prompt = f"Profiling Result: {profiling_result}\n Similarity Search Result: {embedding_result}"
-    context = system_prompt + "\n" + prompt
-    
-    current_app.logger.info("Profiling embedding context:\n" + context)
-    response = vn.submit_prompt(context)
+    try:
+        system_prompt = f"The following is information on the columns of the tables from a database. Find the likely primary and foreign key relations between table columns."
+        prompt = f"Profiling Result: {profiling_result}\n Similarity Search Result: {embedding_result}"
+        context = system_prompt + "\n" + prompt
+        
+        current_app.logger.info("Profiling embedding context:\n" + context)
+        response = vn.submit_prompt(context)
+    except Exception as e:
+        current_app.logger.error(f"Error submitting prompt: {e}", exc_info=True)
+        raise e
     return response
 
 @main.route('/vanna/train/doc', methods=["POST"])

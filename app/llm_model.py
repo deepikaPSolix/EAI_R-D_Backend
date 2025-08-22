@@ -41,6 +41,11 @@ class LLMModel:
                 temperature=0.1, 
                 model='Qwen/Qwen2.5-Coder-32B-Instruct'
              )
+        elif self.model_source == "oss20b":
+            return ChatTogether(
+                temperature=0.1, 
+                model='openai/gpt-oss-20B'
+             )
         elif self.model_source == "llama4":
             return ChatTogether(
                 temperature=0.1, 

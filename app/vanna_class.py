@@ -52,6 +52,7 @@ class LLMModel_Chat(VannaBase):
 class MyVanna(LLMModel_Chat, ChromaDB_VectorStore):
     document_store = {}
     def __init__(self, model_source = "together", config={"path": "../vanna-chroma"}):
+        current_app.logger.info(f"Current model source: {model_source}")
         LLMModel_Chat.__init__(self, model_source)
         ChromaDB_VectorStore.__init__(self, config=config)
 
@@ -271,7 +272,7 @@ class MyVanna(LLMModel_Chat, ChromaDB_VectorStore):
 
         db_id = self.train(documentation=generated_doc)
         current_app.logger.info(f"Generated metadata document is added to vanna chroma: {db_id}")
-        self.add_document(db_id=db_id, doc_id=db_id)
+        self.add_document(db_id=db_id, doc_id="generated_metadata")
 
         return db_id
 
