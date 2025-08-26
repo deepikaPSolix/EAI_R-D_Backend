@@ -6,6 +6,9 @@ from langchain_openai import ChatOpenAI
 from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import PromptTemplate
 import os
+import re
+import json
+
 class LLMModel:
     def __init__(self, model_source: str = "gpt_oss_120", json_mode: bool = False):
         self.model_source = model_source
@@ -83,26 +86,80 @@ class LLMModel:
                 base_url=base_url,
                 format='json' if self.json_mode else ""
             )
+    def _clean_json_text(self,text: str) -> str:
+        """
+        Make model output JSON-loadable:
+        - If a ```json fenced block``` exists, use its content.
+        - Strip a leading 'json' token before { or [.
+        - Extract the first {...} or [...] if extra prose is present.
+        """
+        if text is None:
+            return ""
+        t = str(text).strip()
+
+        # Prefer fenced code block content if present
+        m = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", t, flags=re.IGNORECASE)
+        if m:
+            t = m.group(1).strip()
+
+        # Drop a leading `json` token before a JSON structure
+        t = re.sub(r'^\s*json\s*(?=(\{|\[))', '', t, flags=re.IGNORECASE)
+
+        # Extract first JSON object/array if there is extra text
+        m = re.search(r"(\{(?:.|\n)*\}|\[(?:.|\n)*\])", t)
+        if m:
+            t = m.group(1).strip()
+
+        return t
 
     def infer_model(self, query: str, data_model: BaseModel) -> BaseModel:
         """
-        Infer the model with the given query and data model.
-        
-        :param query: The query string to be processed by the model.
-        :param data_model: The Pydantic model to parse the output.
-        :return: Parsed output as a Pydantic model.
+        Run the model and parse JSON safely into the provided Pydantic model.
         """
         output_parser = PydanticOutputParser(pydantic_object=data_model)
+
+        # Stronger instruction: forbid code fences and 'json' prefix
         format_instructions = output_parser.get_format_instructions()
+        strict_format_hint = (
+            "Return ONLY a valid JSON object. "
+            "Do NOT include any markdown fences or the word 'json' before the object."
+        )
 
         prompt = PromptTemplate(
-            template="Answer the user query.\n{format_instructions}\n{query}\n",
+            template="Answer the user query.\n{format_instructions}\n{strict_hint}\n{query}\n",
             input_variables=["query"],
-            partial_variables={"format_instructions": format_instructions},
+            partial_variables={
+                "format_instructions": format_instructions,
+                "strict_hint": strict_format_hint
+            },
         )
-        chain = prompt | self.model | output_parser
+
+        # Build chain WITHOUT the parser so we can clean/fallback if needed
+        chain = prompt | self.model
+
         try:
             res = chain.invoke({"query": query})
-            return res
+            # Get text regardless of message wrapper
+            raw_text = res if isinstance(res, str) else getattr(res, "content", str(res))
+
+            # First attempt: parser on raw text
+            try:
+                return output_parser.parse(raw_text)
+            except Exception:
+                # Second attempt: clean and parse
+                cleaned = self._clean_json_text(raw_text)
+                try:
+                    return output_parser.parse(cleaned)
+                except Exception:
+                    # Last resort: manual JSON -> Pydantic
+                    obj = json.loads(cleaned)
+                    # pydantic v1 vs v2 compatibility
+                    try:
+                        return data_model.parse_obj(obj)      # pydantic v1
+                    except AttributeError:
+                        return data_model.model_validate(obj) # pydantic v2
+
         except Exception as e:
             current_app.logger.error(f"Error during model inference: {e}", exc_info=True)
+            raise
+
