@@ -640,8 +640,9 @@ def query_vanna(data=None):
         # Iterate until a valid DataFrame is returned or max attempts reached
         counter = 0
         while (type(df) == Exception or type(df) == vanna.exceptions.ValidationError) and counter < 2:
-            current_app.logger.info("Vanna run_sql error occurred: " + str(df))
-            current_app.logger.info(f"Vanna run_sql query attempt {counter + 1}:")
+            current_app.logger.info("Vanna.AI run_sql error occurred:", df)
+            current_app.logger.info(f"Vanna.AI run_sql query attempt {counter + 1}:")
+            # ✅ Ask Vanna.AI a question
             sql, df, fig = vn.ask(
                 question=vanna_query,
                 print_results=False,
@@ -1010,16 +1011,25 @@ def docupload():
         for file in files:
             if file.filename == '':
                 return jsonify({"error": "Empty filename"}), 400
-            
             file_path = os.path.join(current_app.config['GRAPH_DOC_UPLOAD'], file.filename)
+            # Preserve the original filename exactly as uploaded
+            original_filename = file.filename
             file.save(file_path)
+            current_app.logger.info(f"[UPLOAD] Saved file: '{original_filename}' at '{file_path}'")
             saved_files.append(file_path)
-            filenames.append(file.filename)
+            filenames.append(original_filename)
         global chunks
-        chunks = []
+        chunks = []        
         for file_path in saved_files:
-            filename = os.path.basename(file_path)
-            chunk_list = [f"{filename}||{chunk.text}" for chunk in parse_graph_file(file_path)]  
+            # Get the exact original filename (not altered by os.path.basename)
+            file_index = saved_files.index(file_path)
+            if file_index < len(filenames):
+                filename = filenames[file_index]  # Use the original filename
+            else:
+                filename = os.path.basename(file_path)
+            
+            current_app.logger.info(f"[CHUNK] Using filename for chunking: '{filename}'")
+            chunk_list = [f"{filename}||{chunk.text}" for chunk in parse_graph_file(file_path)]
             chunks.extend(chunk_list)
         current_app.logger.info("CHUNKS CREATED :)")
         # current_app.logger.info(f"CHUNKS from FileUploads : {chunks[0]}")
@@ -1047,48 +1057,70 @@ def graph_query():
 
         graph_builder = current_app.graph_builder
         if not hasattr(graph_builder, "all_chunks"):
-      # fallback: load *from RedisGraph* if in‐memory chunks aren't set
+            # fallback: load *from RedisGraph* if in‐memory chunks aren't set
             graph_builder.load_graph_from_redis()
             current_app.graph_builder = graph_builder
 
+        # Get the response from GraphFiles
         result = graph_builder.query_graph_link_response(data["query"])
-        res = (result.get('answer') or '').strip()
-        source = (result.get('sources') or '').strip()
-        url_pattern = r"https?://\S+"
-        links = re.findall(url_pattern, source)
-        clean_text = re.sub(url_pattern, "", result["answer"]).strip()
-        
+        clean_text = result.get('answer', '').strip()
+        sources = result.get('sources', [])
+
+        # Build the response JSON
         response_json = {"response": clean_text}
-        if res.lower() == "i don't have enough information.":
-            response_json = {
-                "response": clean_text
-            }
-       
-        # current_app.logger.info(f"✅ Graph Query Result: {response_json}")
 
-        rag = RAG(ChromaDB(),model_source="together")
+        # Format sources (top 3)
+        formatted_sources = []
+        for src in sources[:3]:
+            if isinstance(src, dict):
+                # Already formatted as {name, url}
+                formatted_sources.append(src)
+            elif isinstance(src, str):
+                url_pattern = r"^https?://"
+                if re.match(url_pattern, src):
+                    formatted_sources.append({"name": src, "url": src})                
+                else:                    
+                    # Don't use os.path.basename which might normalize spaces
+                    # Extract filename from the path while preserving all spaces
+                    if '||' in src:
+                        # Handle the case where source might be in format "filename||content"
+                        filename = src.split('||')[0]
+                    else:
+                        # For regular paths, extract last part
+                        filename = src.split('/')[-1].split('\\')[-1]
+                    try:
+                        # Check if file exists in the upload directory to ensure correct spaces
+                        upload_dir = current_app.config['GRAPH_DOC_UPLOAD']
+                        exact_filename = None
+                        
+                        # Look for the exact filename on disk
+                        for existing_file in os.listdir(upload_dir):
+                            # Compare filenames ignoring spaces to find the match
+                            if existing_file.replace(" ", "") == filename.replace(" ", ""):
+                                exact_filename = existing_file
+                                current_app.logger.info(f"Found exact filename: '{exact_filename}' for '{filename}'")
+                                break
+                        
+                        # Use the exact filename from disk with correct spacing
+                        filename_to_use = exact_filename if exact_filename else filename
+                        
+                        # Generate URL with the exact filename from disk
+                        file_url = url_for('main.download_graph_file', filename=filename_to_use, _external=True)
+                        formatted_sources.append({"name": filename_to_use, "url": file_url})
+                    except Exception as e:
+                        current_app.logger.warning(f"⚠️ Skipped building file URL due to: {e}")
+        if formatted_sources:
+            response_json["sources"] = formatted_sources
 
+        # Add a summary for voice features
+        rag = RAG(ChromaDB(), model_source="together")
         summary_prompt = (
-        f"Summarize the following answer in less than or equal to 30 words.\n"
-        f"Curated Query: \"{data['query']}\"\n"
-        f"Answer: \"{clean_text}\"")
-
+            f"Summarize the following answer in less than or equal to 30 words.\n"
+            f"Curated Query: \"{data['query']}\"\n"
+            f"Answer: \"{clean_text}\"")
         summary_resp = rag.model.invoke(summary_prompt)
         summary_text = summary_resp.content.strip()
-        # voice feature - end
-
         response_json["summary"] = summary_text
-        filename = result.get("sources","")
-        if links:
-            response_json["link"] = links[0]
-        else:
-            filename = result.get("sources", "")
-            if filename:
-                try:
-                    file_url = url_for('main.download_graph_file', filename=filename, _external=True)
-                    response_json["sources"] = [{"name": filename, "url": file_url}]
-                except Exception as e:
-                    current_app.logger.warning(f"⚠️ Skipped building file URL due to: {e}")
 
         return jsonify(response_json)
 
@@ -1098,13 +1130,49 @@ def graph_query():
 
 @main.route('/graph/download/<path:filename>')
 def download_graph_file(filename):
-    """
-    Serve any file from GRAPH_DOC_UPLOAD inline (PDFs open in browser).
-    """
+    current_app.logger.info(f"[DOWNLOAD] Requested filename: '{filename}'")
+    
+    # URL decode the filename to preserve spaces and special characters
+    import urllib.parse
+    decoded_filename = urllib.parse.unquote(filename)
+    current_app.logger.info(f"[DOWNLOAD] Decoded filename: '{decoded_filename}'")
+    
+    # Find the file in the directory - extra safety to ensure exact match
+    upload_dir = current_app.config['GRAPH_DOC_UPLOAD']
+    file_path = os.path.join(upload_dir, decoded_filename)
+    
+    # If file doesn't exist with exact name, try more flexible matching
+    if not os.path.exists(file_path):
+        current_app.logger.warning(f"[DOWNLOAD] File not found with exact match: '{file_path}'")
+        found = False
+        
+        # Check files in the directory, ignoring spaces
+        for existing_file in os.listdir(upload_dir):
+            # First try exact name without spaces
+            if existing_file.replace(" ", "") == decoded_filename.replace(" ", ""):
+                decoded_filename = existing_file
+                current_app.logger.info(f"[DOWNLOAD] Found match ignoring spaces: '{existing_file}'")
+                found = True
+                break
+                
+            # If still not found, try case insensitive
+            if not found and existing_file.lower() == decoded_filename.lower():
+                decoded_filename = existing_file
+                current_app.logger.info(f"[DOWNLOAD] Found case-insensitive match: '{existing_file}'")
+                found = True
+                break
+    
+    # Use the corrected filename path
+    file_path = os.path.join(upload_dir, decoded_filename)
+    if not os.path.exists(file_path):
+        current_app.logger.error(f"[DOWNLOAD] File not found after all matching attempts: '{decoded_filename}'")
+        return jsonify({"error": "File not found"}), 404
+    
+    # Set as_attachment=False to allow browser to preview the file instead of forcing download
     return send_from_directory(
-        current_app.config['GRAPH_DOC_UPLOAD'],
-        filename,
-        as_attachment=False
+        upload_dir,
+        decoded_filename,
+        as_attachment=False  # Allow browser to preview the file
     )
 
 @main.route("/graph/render-clusters-merged", methods=["POST"])

@@ -7,7 +7,7 @@ from langchain.output_parsers import PydanticOutputParser
 from langchain.prompts import PromptTemplate
 import os
 class LLMModel:
-    def __init__(self, model_source: str = "together", json_mode: bool = False):
+    def __init__(self, model_source: str = "gpt_oss_120", json_mode: bool = False):
         self.model_source = model_source
         self.json_mode = json_mode
         self.model = self._initialize_model()
@@ -74,6 +74,11 @@ class LLMModel:
                 model='qwen2.5-coder:32b', 
                 base_url=base_url,
                 format='json' if self.json_mode else ""
+            )
+        elif self.model_source == "gpt_oss_120":
+            return ChatTogether(
+                temperature=0.1, 
+                model='openai/gpt-oss-120b'
             )
         else:
             base_url = os.getenv("OLLAMA_BASE_URL", "http://10.1.161.62:11436")
