@@ -1,6 +1,5 @@
 from flask import current_app
 import pandas as pd
-from ydata_profiling import ProfileReport
 import json
 import numpy as np
 import os
@@ -216,7 +215,6 @@ def convert_numpy_types(obj):
 # Generate profiling report
 def generate_profiling_report(table_name, engine, limit):
     result = generate_profiling_report_custom(table_name, engine, limit)
-    # result = generate_profiling_report_ydata(table_name, engine, limit)
     return result
 
 def generate_profiling_report_custom(table_name, engine, limit):
