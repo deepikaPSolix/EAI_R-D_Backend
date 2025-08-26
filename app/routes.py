@@ -228,10 +228,8 @@ def train_vanna_generate_doc():
     try:
         vn = MyVanna()
         # Metadata
-        # fallback_id = vn.train_with_fallback_doc()
-        # rel_map_id = "-1"
+        fallback_id = vn.train_with_fallback_doc()
         # Relation mapping
-        fallback_id="-1"
         rel_map_data = profiling_embedding(vn)
     except Exception as e:
         current_app.logger.error("Profiling embedding error: " + str(e))
