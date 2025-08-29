@@ -1010,18 +1010,7 @@ def graph_query():
         summary_resp = rag.model.invoke(summary_prompt)
         summary_text = summary_resp.content.strip()
         response_json["summary"] = summary_text
-        filename = result.get("sources","")
-        if links:
-            response_json["link"] = links[0]
-        else:
-            filename = result.get("sources", "")
-            if filename:
-                try:
-                    file_url = url_for('main.download_graph_file', filename=filename, _external=True)
-                    response_json["sources"] = [{"name": filename, "url": file_url}]
-                except Exception as e:
-                    current_app.logger.warning(f"⚠️ Skipped building file URL due to: {e}")
-
+        
         return jsonify(response_json)
 
     except Exception as e:
