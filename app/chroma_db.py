@@ -208,4 +208,81 @@ class ChromaDB:
             # db_manager.delete_all_rows()
         except Exception as e:
             current_app.logger.error(str(e))
-            print("[delete_all_docs] Exception - " + str(e))
+            print("[delete_all_docs] Exception - " + str(e))    
+    def list_collections(self):
+        """List all collections in the ChromaDB instance"""
+        try:
+            # In v0.6.0+, this returns just the collection names (strings)
+            return self.chroma_client.list_collections()
+        except Exception as e:
+            current_app.logger.error(f"Error listing collections: {e}")
+            return []
+    def cleanup_session_collections(self, max_collections=10, preserve_newest=5):
+        """
+        Clean up old session-specific collections to prevent unlimited growth.
+        
+        Args:
+            max_collections: Maximum number of collections to keep
+            preserve_newest: Number of newest collections to always preserve
+            
+        Returns:
+            Number of collections deleted
+        """
+        try:
+            # Get all collections (in v0.6.0+ this returns just the collection names)
+            all_collection_names = self.list_collections()
+            if not all_collection_names:
+                current_app.logger.warning("No collections found during cleanup")
+                return 0
+                
+            # Filter for session-specific collections - ensure we're working with strings
+            session_collection_names = []
+            for name in all_collection_names:
+                # Handle both string names and collection objects for backwards compatibility
+                if hasattr(name, 'name'):
+                    collection_name = name.name  # Pre-v0.6.0
+                else:
+                    collection_name = str(name)  # v0.6.0+
+                    
+                if collection_name.startswith("graph_chunks_"):
+                    session_collection_names.append(collection_name)
+            
+            # If we're under the limit, no need to delete
+            if len(session_collection_names) <= max_collections:
+                current_app.logger.info(f"Only {len(session_collection_names)} collections found, under limit of {max_collections}")
+                return 0
+                
+            # Sort collections by name (as a proxy for creation time)
+            # Extract session ID and use it for sorting (newer sessions have higher IDs)
+            def get_session_id(name):
+                try:
+                    # Try to extract the session ID (usually the part after the last underscore)
+                    return name.split('_')[-1]
+                except:
+                    return name
+                    
+            session_collection_names.sort(key=get_session_id)
+            
+            # Keep the newest collections
+            names_to_delete = session_collection_names[:-preserve_newest]
+            
+            # Only delete if we're over the maximum
+            if len(session_collection_names) - len(names_to_delete) < max_collections:
+                names_to_delete = session_collection_names[:-(max_collections)]
+            
+            current_app.logger.info(f"Found {len(session_collection_names)} collections, deleting {len(names_to_delete)}")
+            
+            # Delete old collections
+            deleted_count = 0
+            for collection_name in names_to_delete:
+                try:
+                    self.chroma_client.delete_collection(name=collection_name)
+                    current_app.logger.info(f"🧹 Deleted old ChromaDB collection: {collection_name}")
+                    deleted_count += 1
+                except Exception as e:
+                    current_app.logger.warning(f"⚠️ Failed to delete ChromaDB collection {collection_name}: {e}")
+            
+            return deleted_count
+        except Exception as e:
+            current_app.logger.error(f"❌ Error during ChromaDB cleanup: {e}")
+            return 0

@@ -1,5 +1,5 @@
 # 1) Base image
-FROM python:3.11-slim
+FROM python:3.11-slim-bookworm
 
 # 2) System deps (we pull in sed so we can strip opik later)
 RUN apt-get update && \
