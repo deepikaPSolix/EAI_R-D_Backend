@@ -86,8 +86,16 @@ def deduplicate_chunks(chunks, prioritize_graph=True):
 class GraphFiles():
     def __init__(self):
         # Use global/shared SentenceTransformer instance for performance
-        from app import st_model
-        self.st_model = st_model
+        # Lazy, per-process model init to avoid CUDA in forked children
+        import torch
+        from sentence_transformers import SentenceTransformer
+
+        if not hasattr(self, "_st_model") or self._st_model is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            # choose your model; keep it small unless you really need bigger
+            self._st_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
+        self.st_model = self._st_model
+
         self.llm = LLMModel.from_together()
         self.all_chunks=None
         self.all_embeddings = None        

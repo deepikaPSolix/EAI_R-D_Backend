@@ -57,3 +57,4 @@ python-Levenshtein
 crewai
 crewai_tools
 nest-asyncio
+psutil>=5.9.0
