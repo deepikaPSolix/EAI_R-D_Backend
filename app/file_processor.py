@@ -18,6 +18,20 @@ from lxml import etree
 import openpyxl
 from flask import current_app
 import pandas as pd
+# Problem: extract_text_from_audio() creates a Whisper model every call and lets CUDA init inside forked children.
+#Fix: cache one model per process and choose device once. Also, force PaddleOCR to CPU unless you really need GPU there.
+# cache per-process models to avoid repeated CUDA inits
+_WHISPER_MODEL = None
+
+def _get_whisper_model():
+    global _WHISPER_MODEL
+    if _WHISPER_MODEL is None:
+        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        # pick your model size here ("turbo"/"base"/"small"/"medium"/"large")
+        _WHISPER_MODEL = whisper.load_model("turbo", device=device)
+    return _WHISPER_MODEL
+
 
 class FileProcessor(ABC):
     @abstractmethod
@@ -225,16 +239,24 @@ class AudioFileProcessor(FileProcessor):
         audio_text = self.extract_text_from_audio(file_path)
         return super().chunks_from_text(audio_text)
 
+    # def extract_text_from_audio(self, file_path: str):
+    #     print("GPU: ", torch.cuda.is_available())
+    #     model = whisper.load_model("turbo")
+    #     result = model.transcribe(file_path)
+    #     return result['text']
     def extract_text_from_audio(self, file_path: str):
-        print("GPU: ", torch.cuda.is_available())
-        model = whisper.load_model("turbo")
+    
+        print("GPU available? ", torch.cuda.is_available())
+        model = _get_whisper_model()
         result = model.transcribe(file_path)
         return result['text']
+
     
 class VideoFileProcessor(AudioFileProcessor):
 
     def __init__(self):
-        self.__ocr = PaddleOCR(use_angle_cls=True, lang='en')
+         # Force CPU to avoid accidental CUDA init in forked workers
+        self.__ocr = PaddleOCR(use_angle_cls=True, lang='en',use_gpu=False)
 
     def process_file(self, file_path):
         video_text = ""
@@ -298,21 +320,29 @@ class VideoFileProcessor(AudioFileProcessor):
         Process a frame for OCR and extract text.
 
         Args:
-            frame (numpy.ndarray): The current frame from the video.
-
+            frame (numpy.ndarray): The current frame from the video. MoviePy gives RGB.
         Returns:
             str: Extracted text from the frame.
         """
         try:
-            result = self.__ocr.ocr(frame, det=True, cls=True)
+            # PaddleOCR expects BGR (OpenCV convention); convert RGB -> BGR
+            frame_bgr = frame[:, :, ::-1]
+
+            # Avoid version-specific kwargs – 'det' causes "unexpected keyword" on some builds
+            # rec=True is the default; cls=True enables angle classification
+            result = self.__ocr.ocr(frame_bgr, cls=True)
+
             if result and len(result) > 0:
-                text = [item[1][0] for item in result[0] if len(item) > 1 and item[1]]
+                # result is a list per image: [[ [box, (text, score)], ... ]]
+                lines = result[0]
+                text = [item[1][0] for item in lines if len(item) > 1 and item[1]]
                 return ' '.join(text)
             else:
                 return ""
         except Exception as e:
             print(f"Error during OCR processing: {e}")
             return ""
+
         
     def __calculate_pixel_difference(self, prev_frame, curr_frame):
         """
