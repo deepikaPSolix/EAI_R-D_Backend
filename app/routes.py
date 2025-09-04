@@ -937,6 +937,7 @@ def docupload():
 @main.route("/graph/query", methods=["POST"])
 def graph_query():
     try:
+        import re # Import re module at the beginning of the function
         data = request.get_json()
         if not data or "query" not in data:
             return jsonify({"error": "Query parameter required"}), 400
@@ -955,8 +956,28 @@ def graph_query():
         clean_text = result.get('answer', '').strip()
         sources = result.get('sources', [])
 
-        # Build the response JSON
-        response_json = {"response": clean_text}
+        # Check if the response contains HTML tables
+        contains_html_table = "<table" in clean_text and "</table>" in clean_text
+        
+        # If it contains tables, ensure HTML is preserved correctly
+        if contains_html_table:
+            current_app.logger.info("HTML table detected in response - preserving HTML formatting")
+            # Remove any "Sources Used:" line that might be after the table
+            # Note: re module is already imported at the beginning of the function
+            sources_pattern = r'Sources Used:.*$'
+            clean_text_without_sources = re.sub(sources_pattern, '', clean_text, flags=re.MULTILINE).strip()
+            
+            # Make sure HTML tables are formatted correctly
+            response_text = clean_text_without_sources
+        else:
+            response_text = clean_text
+            
+        # Build the response JSON with HTML information
+        response_json = {
+            "response": response_text, 
+            "contains_html": contains_html_table,
+            "content_type": "html" if contains_html_table else "text"
+        }
 
         # Format sources (top 3)
         formatted_sources = []
@@ -1001,14 +1022,23 @@ def graph_query():
         if formatted_sources:
             response_json["sources"] = formatted_sources
 
-        # Add a summary for voice features
-        rag = RAG(ChromaDB(), model_source="together")
+        # Add a summary for voice features - strip HTML tags if present
+        rag = RAG(ChromaDB(), model_source="openai")
+        
+        # Remove HTML tags for the summary generation
+        import re
+        text_for_summary = re.sub(r'<.*?>', ' ', clean_text)
+        
         summary_prompt = (
-            f"Summarize the following answer in less than or equal to 30 words.\n"
+            f"Summarize the following answer in less than or equal to 30 words. Use plain text only, no HTML or markdown formatting.\n"
             f"Curated Query: \"{data['query']}\"\n"
-            f"Answer: \"{clean_text}\"")
+            f"Answer: \"{text_for_summary}\"")
         summary_resp = rag.model.invoke(summary_prompt)
         summary_text = summary_resp.content.strip()
+        
+        # Remove any HTML from the summary itself
+        summary_text = re.sub(r'<.*?>', ' ', summary_text)
+        
         response_json["summary"] = summary_text
 
         return jsonify(response_json)
