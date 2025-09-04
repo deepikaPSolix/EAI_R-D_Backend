@@ -83,6 +83,139 @@ def deduplicate_chunks(chunks, prioritize_graph=True):
     current_app.logger.info(f"📊 Deduplication results: {len(unique_chunks)} unique chunks from {len(chunks)} total")
     
     return unique_chunks
+
+# --- Retrieval helpers: MMR selection and efficient context building ---
+def _mmr_select(query_emb, doc_embs, lambda_mult=0.6, top_k=10):
+    """
+    Maximal Marginal Relevance to select diverse yet relevant items.
+    - query_emb: (D,)
+    - doc_embs: (N, D)
+    Returns indices of selected docs.
+    """
+    import numpy as np
+    if doc_embs is None or len(doc_embs) == 0:
+        return []
+    scores = cosine_similarity([query_emb], doc_embs).flatten()
+    selected, candidates = [], list(range(len(doc_embs)))
+    if top_k <= 0:
+        return []
+    # pick the best first
+    first = int(np.argmax(scores))
+    selected.append(first)
+    candidates.remove(first)
+    while len(selected) < min(top_k, len(doc_embs)) and candidates:
+        # For each candidate, compute diversity as max sim to any selected
+        cand_sims = cosine_similarity(doc_embs[candidates], doc_embs[selected])
+        max_div = cand_sims.max(axis=1) if cand_sims.size else np.zeros(len(candidates))
+        # MMR: argmax lambda*relevance - (1-lambda)*diversity
+        mmr_scores = lambda_mult * scores[candidates] - (1 - lambda_mult) * max_div
+        next_idx_local = int(np.argmax(mmr_scores))
+        next_idx = candidates[next_idx_local]
+        selected.append(next_idx)
+        candidates.remove(next_idx)
+    return selected
+
+def _split_sentences(text: str):
+    """Lightweight sentence splitter to avoid heavy downloads."""
+    if not text:
+        return []
+    # Normalize spaces
+    t = re.sub(r"\s+", " ", str(text)).strip()
+    # Split on punctuation while keeping numbers/dates intact
+    parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", t)
+    # Fallback if splitting produced nothing
+    return [p.strip() for p in parts if p and len(p.strip()) > 0]
+
+def _top_sentences_for_query(text: str, query_emb, st_model, max_sentences=2):
+    """Pick the top-N sentences by semantic similarity to the query."""
+    sents = _split_sentences(text)
+    if not sents:
+        return []
+    # Bound number of sentences to embed for speed
+    sample_sents = sents[:20]
+    if len(sample_sents) == 1:
+        return sample_sents
+    sent_embs = st_model.encode(sample_sents)
+    sims = cosine_similarity([query_emb], sent_embs).flatten()
+    order = np.argsort(sims)[::-1][:max_sentences]
+    top = [sample_sents[i] for i in order]
+    # If the question implies counting/amount, ensure at least one sentence with digits
+    try:
+        if re.search(r"\b(how many|count|total|sum|amount|number|quantity)\b", str(query_emb), re.IGNORECASE):
+            # Note: query text isn't available here; fallback to numeric evidence inclusion from text
+            pass
+    except Exception:
+        pass
+    # Lightweight numeric evidence pass using original sentences
+    if not any(re.search(r"\d", s) for s in top):
+        for s in sample_sents:
+            if re.search(r"\d", s):
+                if s not in top:
+                    top.append(s)
+                break
+    return top[:max_sentences]
+
+def _dynamic_context_budget(query: str, default_max_chars=12000):
+    """Estimate a safe context character budget based on query length."""
+    qlen = len(str(query).split())
+    if qlen <= 6:
+        return 6000
+    if qlen <= 12:
+        return 9000
+    return default_max_chars
+
+def _build_efficient_context(selected_chunks, query, st_model, query_emb, max_chars):
+    """
+    Build context by taking top sentences per chunk until we reach the budget.
+    Keeps source grouping and avoids redundant long blocks.
+    """
+    total = 0
+    parts = []
+    sources_added = set()
+    # First pass: 2 top sentences per chunk
+    for ch in selected_chunks:
+        src = ch.get("source", "Unknown Source")
+        text = ch.get("text", "")
+        if not text:
+            continue
+        top_sents = _top_sentences_for_query(text, query_emb, st_model, max_sentences=2)
+        if not top_sents:
+            continue
+        header = f"[SOURCE: {os.path.basename(src) if src and not re.match(r'^https?://', src) else src}]\n"
+        body = " ".join(top_sents)
+        block = header + body
+        if total + len(block) > max_chars:
+            # Try to add partially
+            remain = max_chars - total
+            if remain > 200:
+                parts.append(header + body[:remain- len(header) - 3] + "...")
+                total = max_chars
+            break
+        parts.append(block)
+        total += len(block)
+        sources_added.add(src)
+
+    # If still room, add one more sentence per chunk in round-robin
+    if total < max_chars:
+        for ch in selected_chunks:
+            if total >= max_chars:
+                break
+            text = ch.get("text", "")
+            extra_sents = _top_sentences_for_query(text, query_emb, st_model, max_sentences=3)
+            # We already used top 2; try to add the 3rd if exists
+            if len(extra_sents) >= 3:
+                extra = extra_sents[2]
+                add = " " + extra
+                if total + len(add) <= max_chars:
+                    parts.append(add)
+                    total += len(add)
+                else:
+                    remain = max_chars - total
+                    if remain > 50:
+                        parts.append(" " + extra[:remain-3] + "...")
+                        total = max_chars
+                    break
+    return "\n\n".join(parts)
 class GraphFiles():
     def __init__(self):
         # Use global/shared SentenceTransformer instance for performance
@@ -413,24 +546,24 @@ class GraphFiles():
         except Exception as e:
             current_app.logger.error(f"❌ Failed to load graph from RedisGraph: {e}", exc_info=True)
             return False
-            self.G_nx = G_nx
-            self.chunk_node_ids = list(G_nx.nodes())
-            self.all_chunks = [
-                {"text": G_nx.nodes[n].get("text", ""), "source": G_nx.nodes[n].get("source", "No Source Available")}
-                for n in self.chunk_node_ids
-            ]
-            self._ensure_all_chunks_are_dicts()
+            # self.G_nx = G_nx
+            # self.chunk_node_ids = list(G_nx.nodes())
+            # self.all_chunks = [
+            #     {"text": G_nx.nodes[n].get("text", ""), "source": G_nx.nodes[n].get("source", "No Source Available")}
+            #     for n in self.chunk_node_ids
+            # ]
+            # self._ensure_all_chunks_are_dicts()
             
-            # Load or generate embeddings
-            try:
-                self.all_embeddings = self.st_model.encode([c["text"] for c in self.all_chunks])
-                current_app.logger.info(f"✅ Successfully generated embeddings for {len(self.all_chunks)} chunks")
-            except Exception as e:
-                current_app.logger.error(f"❌ Failed to generate embeddings: {e}")
-                return False
+            # # Load or generate embeddings
+            # try:
+            #     self.all_embeddings = self.st_model.encode([c["text"] for c in self.all_chunks])
+            #     current_app.logger.info(f"✅ Successfully generated embeddings for {len(self.all_chunks)} chunks")
+            # except Exception as e:
+            #     current_app.logger.error(f"❌ Failed to generate embeddings: {e}")
+            #     return False
                 
-            current_app.logger.info(f"✅ Successfully loaded graph from RedisGraph with {G_nx.number_of_nodes()} nodes and {G_nx.number_of_edges()} edges")
-            return True
+            # current_app.logger.info(f"✅ Successfully loaded graph from RedisGraph with {G_nx.number_of_nodes()} nodes and {G_nx.number_of_edges()} edges")
+            # return True
             
         except Exception as e:
             current_app.logger.error(f"❌ Failed to load graph from RedisGraph: {e}", exc_info=True)
@@ -866,7 +999,7 @@ class GraphFiles():
             return []
             
         try:              
-            current_app.logger.info(f"🔍 Querying current session's ChromaDB collection '{self.collection_name}' with '{query_text[:50]}...' for {n_results} results")
+            # current_app.logger.info(f"🔍 Querying current session's ChromaDB collection '{self.collection_name}' with '{query_text[:50]}...' for {n_results} results")
             
             available_chunks = len(self.all_chunks) if self.all_chunks else 100
             actual_n_results = min(n_results, available_chunks)
@@ -897,7 +1030,7 @@ class GraphFiles():
                     }
                     chunks.append(chunk)
                     
-                    current_app.logger.debug(f"📄 Result {i+1}: Source={source}, Cluster={cluster_id}, Distance={f'{distance:.4f}' if distance is not None else 'N/A'}")
+                    # current_app.logger.debug(f"📄 Result {i+1}: Source={source}, Cluster={cluster_id}, Distance={f'{distance:.4f}' if distance is not None else 'N/A'}")
                 
                 sources = Counter([c.get("source", "Unknown") for c in chunks])
                 clusters = Counter([c.get("cluster_id", -1) for c in chunks])
@@ -928,18 +1061,18 @@ class GraphFiles():
             current_app.logger.warning("❌ No chunks available for retrieval")
             return {"answer": "I don't have enough information.", "source": None}
 
-        current_app.logger.info(f"📊 Total chunks in memory: {len(self.all_chunks)}")
+        # current_app.logger.info(f"📊 Total chunks in memory: {len(self.all_chunks)}")
 
         all_relevant_chunks = []
         graph_chunks = []
         semantic_chunks = []
         source_files = set()
         
-        current_app.logger.info("🔍 [STEP 1] Retrieving semantically similar chunks from ChromaDB")
+        # current_app.logger.info("🔍 [STEP 1] Retrieving semantically similar chunks from ChromaDB")
         max_chroma_results = min(len(self.all_chunks) if self.all_chunks else 50, 100)
         chroma_chunks = self.query_chroma_chunks(query, n_results=max_chroma_results)
         if chroma_chunks:
-            current_app.logger.info(f"✅ Found {len(chroma_chunks)} relevant chunks from ChromaDB")
+            # current_app.logger.info(f"✅ Found {len(chroma_chunks)} relevant chunks from ChromaDB")
             for chunk in chroma_chunks:
                 chunk["retrieval_type"] = "semantic"
             semantic_chunks.extend(chroma_chunks)
@@ -948,10 +1081,10 @@ class GraphFiles():
                     source_files.add(chunk.get('source'))
         else:
             current_app.logger.warning("⚠️ No chunks found in ChromaDB")
-        current_app.logger.info("🔍 [STEP 2] Performing graph-based retrieval")
+        # current_app.logger.info("🔍 [STEP 2] Performing graph-based retrieval")
         self._ensure_all_chunks_are_dicts()
 
-        current_app.logger.info("📊 Computing query embedding")
+        # current_app.logger.info("📊 Computing query embedding")
         q_emb = self.st_model.encode([query])[0]
 
         sims = cosine_similarity([q_emb], self.all_embeddings).flatten()
@@ -963,19 +1096,19 @@ class GraphFiles():
         else:
             k = max(20, total_chunks // 10)
         seeds = sims.argsort()[-k:][::-1].tolist()
-        current_app.logger.info(f"✅ Found {len(seeds)} initial seed chunks based on embedding similarity")
+        # current_app.logger.info(f"✅ Found {len(seeds)} initial seed chunks based on embedding similarity")
 
-        current_app.logger.info(f"🔍 Expanding graph with depth=2 from {len(seeds)} seed nodes")
+        # current_app.logger.info(f"🔍 Expanding graph with depth=2 from {len(seeds)} seed nodes")
         expansion_limit = max(30, min(total_chunks, total_chunks // 3))
         expanded = self._redisgraph_expand(seeds, max_depth=2, limit=expansion_limit)
-        current_app.logger.info(f"✅ Graph expansion found {len(expanded)} additional connected chunks")
+        # current_app.logger.info(f"✅ Graph expansion found {len(expanded)} additional connected chunks")
         combined_idxs = list(seeds)
 
         for e in expanded:
             if e["idx"] not in combined_idxs:
                 combined_idxs.append(e["idx"])
         
-        current_app.logger.info(f"📊 Total unique graph nodes after expansion: {len(combined_idxs)}")
+        # current_app.logger.info(f"📊 Total unique graph nodes after expansion: {len(combined_idxs)}")
         for idx in combined_idxs:
             if idx < 0 or idx >= len(self.all_chunks):
                 current_app.logger.warning(f"⚠️ Graph returned invalid node index: {idx} (max index: {len(self.all_chunks)-1})")
@@ -991,71 +1124,48 @@ class GraphFiles():
             graph_chunks.append(chunk)
             if chunk.get('source'):
                 source_files.add(chunk.get('source'))
-        current_app.logger.info("🔍 [STEP 3] Merging and deduplicating chunks")
-        current_app.logger.info(f"📊 Before deduplication: {len(graph_chunks)} graph chunks, {len(semantic_chunks)} semantic chunks")
+        # current_app.logger.info("🔍 [STEP 3] Merging and deduplicating chunks")
+        # current_app.logger.info(f"📊 Before deduplication: {len(graph_chunks)} graph chunks, {len(semantic_chunks)} semantic chunks")
         
         all_chunks_combined = graph_chunks + semantic_chunks
 
         all_relevant_chunks = deduplicate_chunks(all_chunks_combined, prioritize_graph=True)
 
-        current_app.logger.info(f"📊 After deduplication: {len(all_relevant_chunks)} unique chunks")
-        current_app.logger.info(f"📊 Breakdown: {len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'graph'])} graph chunks, {len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'semantic'])} semantic chunks")
+        # current_app.logger.info(f"📊 After deduplication: {len(all_relevant_chunks)} unique chunks")
+        # current_app.logger.info(f"📊 Breakdown: {len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'graph'])} graph chunks, {len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'semantic'])} semantic chunks")
 
-        current_app.logger.info("🔍 [STEP 4] Re-ranking chunks based on relevance to query")
+        # current_app.logger.info("🔍 [STEP 4] Re-ranking chunks based on relevance to query")
         texts = [c["text"] for c in all_relevant_chunks]
         if texts:
-            current_app.logger.info("📊 Computing similarity scores for re-ranking")
+            # current_app.logger.info("📊 Computing similarity scores for re-ranking")
             q_emb = self.st_model.encode([query])[0]
             chunk_embs = self.st_model.encode(texts)
             sims = cosine_similarity([q_emb], chunk_embs).flatten()
 
-            available_chunks = len(all_relevant_chunks)
-            
-            query_words = len(query.split())
-            is_complex_query = query_words > 10 or any(word in query.lower() for word in ['analyze', 'compare', 'detailed', 'comprehensive', 'all', 'every', 'list'])
-            
-            if is_complex_query:
-                max_context_chunks = min(available_chunks, max(20, available_chunks // 2))
-            else:
-                max_context_chunks = min(available_chunks, max(10, available_chunks // 3))
-                
-            top_k = max_context_chunks
-            top_indices = np.argsort(sims)[::-1][:top_k]
-            current_app.logger.info(f"📊 Selected top {len(top_indices)} chunks for context (query complexity: {'high' if is_complex_query else 'normal'})")
+            available = len(all_relevant_chunks)
+            # Dynamic character budget and MMR-driven selection (no phrase hardcoding)
+            char_budget = _dynamic_context_budget(query)
+            # Estimate how many chunks we can afford: assume ~700 chars per chunk initially
+            est_per_chunk = 700
+            mmr_k = max(5, min(20, char_budget // est_per_chunk, available))
+            sel_indices = _mmr_select(q_emb, chunk_embs, lambda_mult=0.6, top_k=mmr_k)
+            top_indices = sel_indices
+            current_app.logger.info(f"📊 Selected top {len(top_indices)} chunks via MMR for diverse context")
 
-            current_app.logger.info("📝 Building context for LLM prompt")
-            context_units = []
-            
+            # current_app.logger.info("📝 Building context for LLM prompt (sentence-level)")
+            selected_chunks = [all_relevant_chunks[i] for i in top_indices]
+
+            # Log selections
             for i in top_indices:
-                chunk = all_relevant_chunks[i]
-                src = chunk.get("source", "Unknown Source")
-                retrieval_type = chunk.get("retrieval_type", "unknown")
-                similarity_score = sims[i]
-                
-                current_app.logger.info(f"📄 Including chunk from {src} (type: {retrieval_type}, similarity: {similarity_score:.4f})")
-                
-                chunk_text = chunk['text']
-                
-                if any(pattern in query.lower() for pattern in ['id', 'number', 'amount', 'date', 'order']):
-                    import re
-                    filename_base = os.path.splitext(os.path.basename(src))[0]
-                    
-                    numbers_in_filename = re.findall(r'\d+', filename_base)
-                    if numbers_in_filename:
-                        chunk_text = f"[DOCUMENT: {filename_base} - Contains: {', '.join(numbers_in_filename)}]\n{chunk_text}"
-                
-                import re
-                url_pattern = r"^https?://"
-                if re.match(url_pattern, src):
-                    context_units.append(f"**Source Document:** {src}\n**Content:** {chunk_text}")
-                else:
-                    context_units.append(f"**Source Document:** {os.path.basename(src)}\n**Content:** {chunk_text}")
-                
+                ch = all_relevant_chunks[i]
+                src = ch.get("source", "Unknown Source")
+                retrieval_type = ch.get("retrieval_type", "unknown")
+                current_app.logger.info(f"📄 Selected chunk from {src} (type: {retrieval_type})")
                 if src:
                     source_files.add(src)
 
-            context = "\n---\n".join(context_units)
-            current_app.logger.info(f"📊 Final context built with {len(context_units)} chunks")
+            context = _build_efficient_context(selected_chunks, query, self.st_model, q_emb, max_chars=char_budget)
+            # current_app.logger.info(f"📊 Final context length: {len(context)} chars (budget: {char_budget})")
         else: 
             current_app.logger.warning("⚠️ No text content found in chunks")
             context = ""
@@ -1080,128 +1190,45 @@ class GraphFiles():
 
         unique_sources = len(top_sources)
 
-        current_app.logger.info("🔍 [STEP 5] Building LLM prompt with context")
+        # current_app.logger.info("🔍 [STEP 5] Building LLM prompt with context")
         prompt = (
-                "You are an expert document analyst. Your task is to thoroughly examine ALL provided context and extract EVERY relevant piece of information that answers the user's question.\n\n"
-                f" Context from {unique_sources} document sources:\n{context}\n\n"
-                f" User Query: {query}\n\n"
-                "**CRITICAL INSTRUCTIONS - READ CAREFULLY:**\n"
-                " COMPREHENSIVE ANALYSIS REQUIRED:\n"
-                "- Examine EVERY SINGLE document excerpt in the context above\n"
-                "- Do NOT stop after finding just a few items - search through ALL content\n"
-                "- Look for patterns, numbers, IDs, names, dates, or ANY data points relevant to the query\n"
-                "- If the query asks for a list or collection, find ALL instances across ALL documents\n"
-                "- Process each document section systematically and thoroughly\n\n"
-                " PROCESSING APPROACH:\n"
-                "- Scan through each source document methodically\n"
-                "- Cross-reference information between documents\n"
-                "- Consolidate findings from multiple sources\n"
-                "- Present information in a clear, organized manner\n"
-                "- Include quantitative details when available (counts, amounts, percentages, etc.)\n\n"
-                " OUTPUT FORMAT GUIDELINES:\n"
-                "- CONSISTENCY IS CRITICAL: The same query pattern should ALWAYS produce the same format type\n"
-                "- FIRST ANALYZE THE QUERY ITSELF: The user's query is the primary factor in determining format\n"
-                "- THEN ANALYZE THE RESULT DATA: Examine what information you've found and how it's structured\n"
-                "- FOR QUERIES ABOUT MULTIPLE DOCUMENTS: ALWAYS use tables, never use text format\n\n"
-                "QUERY-BASED FORMAT DECISION:\n"
-                "- ALWAYS USE TABLES FOR THESE EXACT QUERY PATTERNS:\n"
-                "  • Queries starting with 'Give me all...' or 'Show me all...' → MUST USE TABLES\n"
-                "  • Queries containing 'list all' or 'show all' → MUST USE TABLES\n"
-                "  • Queries asking for 'invoices', 'purchase orders', or any document types → MUST USE TABLES\n"
-                "  • Queries containing words 'compare', 'differences', or 'similarities' → MUST USE TABLES\n"
-                "  • Queries asking about multiple entities with ANY attributes → MUST USE TABLES\n"
-                "  • Queries using words like 'all', 'every', 'each' + plural nouns → MUST USE TABLES\n\n"
-                "DATA-BASED FORMAT DECISION:\n"
-                "- USE TABLES WHEN the result information contains:\n"
-                "  • Multiple items that share common attributes or properties\n"
-                "  • Information that naturally forms categories or classifications\n"
-                "  • Data that benefits from side-by-side comparison\n"
-                "  • Structured information like dates, numbers, IDs, or specific attributes\n\n"
-                "- USE PLAIN TEXT WHEN:\n"
-                "  • The query is asking for a definition, concept explanation, or process description\n"
-                "  • The query is about a single entity with no comparative elements\n"
-                "  • The information found is narrative in nature with no structured elements\n"
-                "  • The response would be clearer as a paragraph than organized in columns\n\n"
-                "- TABLE STYLING: If you determine a table is truly appropriate, use this template:\n"
-                " <!DOCTYPE html>\n"
-                "<html>\n" 
-                "<body>\n"
-                "  <table style='border-collapse: collapse; width: 100%; margin: 15px 0;'>\n"
-                "    <thead>\n"
-                "      <tr>\n"
-                "        <th style='border: 1px solid #dddddd; text-align: left; padding: 8px; background-color: #f2f2f2;'>Header 1</th>\n"
-                "        <th style='border: 1px solid #dddddd; text-align: left; padding: 8px; background-color: #f2f2f2;'>Header 2</th>\n"
-                "      </tr>\n"
-                "    </thead>\n"
-                "    <tbody>\n"
-                "      <tr>\n"
-                "        <td style='border: 1px solid #dddddd; text-align: left; padding: 8px;'>Data 1</td>\n"
-                "        <td style='border: 1px solid #dddddd; text-align: left; padding: 8px;'>Data 2</td>\n"
-                "      </tr>\n"
-                "    </tbody>\n"
-                "  </table>\n"
-                "</body>\n"
-                "</html>\n"
-                "- ALTERNATING ROW COLORS: Add style='background-color: #f9f9f9;' to every even <tr> in the tbody for better readability\n"
-                "- NUMBER ALIGNMENT: For columns with numbers, use text-align: right; in the style attribute\n"
-                "- HEADER CLARITY: Use clear, descriptive headers that explain the data in each column\n\n"
-                "FORMAT DECISION GUIDANCE:\n\n"
-                "QUERY INTENTION ANALYSIS:\n"
-                "• First, analyze the query to understand what the user is really asking for\n"
-                "• Identify key verbs in the query: 'list', 'compare', 'describe', 'explain', etc.\n"
-                "• Look for plural nouns or quantity words indicating multiple items\n"
-                "• Determine if the query is asking for specific attributes or properties\n\n"
-                "QUERY TYPE CLASSIFICATION:\n"
-                "• COLLECTION QUERIES: When users ask for 'all' of something → ALWAYS TABLES\n"
-                "  Example: 'Give me all the invoices and purchase orders' → MUST BE TABLE\n"
-                "• COMPARISON QUERIES: When users ask to compare or contrast items → ALWAYS TABLES\n"
-                "  Example: 'Compare the purchase orders from different companies'\n"
-                "• LISTING QUERIES: When users ask for multiple items or records → ALWAYS TABLES\n"
-                "  Example: 'What documents mention Company XYZ?'\n"
-                "• ATTRIBUTE QUERIES: When users ask for specific properties → ALWAYS TABLES if multiple items\n"
-                "  Example: 'What are the order numbers and dates for all invoices?'\n"
-                "• EXPLANATION QUERIES: When users ask for concepts or processes → USUALLY PLAIN TEXT\n"
-                "  Example: 'How does the document approval process work?'\n\n"
-                "DATA PRESENTATION TEST:\n"
-                "• Is the data naturally structured with shared properties? → Consider tables\n"
-                "• Would comparing information side-by-side help understanding? → Consider tables\n"
-                "• Does the information contain multiple records with same attributes? → Consider tables\n"
-                "• Is the information purely descriptive with no recurring elements? → Plain text may be better\n\n"
-                " QUALITY STANDARDS:\n"
-                "- QUERY-DRIVEN FORMATTING: Let the user's question guide your format choice\n"
-                "- DYNAMIC ANALYSIS: Don't use fixed rules - analyze each query independently\n"
-                "- COMPREHENSIVE SEARCH: Find all relevant data across all provided documents\n"
-                "- INTELLIGENT SYNTHESIS: Connect information from multiple sources when relevant\n"
-                "- APPROPRIATE STRUCTURE: Match your formatting to what the query is asking for\n"
-                "- PRECISE DATA: Include exact values, IDs, dates, and other specific details\n"
-                "- RESPONSIVE FORMATTING: When a query implies tabular data, provide tables\n\n"
-                "🎯 FINAL DECISION PROCESS:\n"
-                "1. QUERY PATTERN MATCHING: First check if the query matches ANY of these patterns:\n"
-                "   - Starting with 'Give me all', 'Show me all', 'List all' → MUST USE TABLES\n" 
-                "   - Contains 'invoices', 'purchase orders', or any document types → MUST USE TABLES\n"
-                "   - Contains words 'all', 'every', 'each' with plural nouns → MUST USE TABLES\n"
-                "   - If ANY of these patterns match → ALWAYS USE TABLES, do not consider alternatives\n\n"
-                "2. If no exact pattern match, then ANALYZE THE QUERY intent and data structure:\n"
-                "   - For queries asking for multiple items with attributes → Use tables\n"
-                "   - For queries about single concepts or explanations → Use plain text\n"
-                "   - For comparing information across items → Use tables\n"
-                "   - For structured data that forms natural rows/columns → Use tables\n\n"
-                "3. CONSISTENCY CHECK: For similar query types, always use the same format\n"
-                "   - If you used tables for a listing query before, use tables again\n"
-                "   - If the query structure is identical, the response format should be identical\n\n"
-                "- At the end of your answer, add a line: Sources Used: <comma-separated list of source document names you used for your answer, up to 3>"
-            )
+            "You are an expert document analyst. Answer ONLY using the context below.\n"
+            "If the answer is not in the context, say: I don't have enough information.\n\n"
+            f"CONTEXT (from {unique_sources} sources):\n{context}\n\n"
+            f"QUESTION: {query}\n\n"
+            "GUIDELINES:\n"
+            "- Be accurate and complete.\n"
+            "- Prefer concise bullet points or a short paragraph.\n"
+            "- If the data is multi-item, use a simple HTML table with clear headers.\n"
+            "- End with: Sources Used: <comma-separated source names up to 3>."
+        )
         try:
             import re  # Ensure re is imported at the beginning of this block
-            current_app.logger.info("🔍 [STEP 6] Generating response with LLM")
-            current_app.logger.info(f"📝 Sending comprehensive prompt with {len(prompt)} characters to LLM")
+            # current_app.logger.info("🔍 [STEP 6] Generating response with LLM")
+            # current_app.logger.info(f"📝 Sending comprehensive prompt with {len(prompt)} characters to LLM")
             raw_response = self.llm.model.invoke(prompt)
             response_text = str(raw_response.content).strip()
-            current_app.logger.info(f"✅ LLM generated a response of {len(response_text)} characters")
+            # current_app.logger.info(f"✅ LLM generated a response of {len(response_text)} characters")
 
             if "[NO_ANSWER]" in response_text:
                 current_app.logger.warning("⚠️ LLM indicated insufficient information")
-                return {"answer": "I don't have enough information.", "source": None}
+                # Fallback: expand context budget once and retry
+                if 'selected_chunks' in locals():
+                    new_budget = int(char_budget * 1.8)
+                    current_app.logger.info(f"🔁 Retrying with expanded context budget: {new_budget}")
+                    bigger_context = _build_efficient_context(selected_chunks, query, self.st_model, q_emb, max_chars=new_budget)
+                    retry_prompt = (
+                        "You are an expert document analyst. Answer ONLY using the context below.\n"
+                        "If the answer is not in the context, say: I don't have enough information.\n\n"
+                        f"CONTEXT (expanded):\n{bigger_context}\n\n"
+                        f"QUESTION: {query}\n\n"
+                        "GUIDELINES:\n- Be accurate and complete.\n- Prefer concise bullet points or a short paragraph.\n- If the data is multi-item, use a simple HTML table with clear headers.\n- End with: Sources Used: <comma-separated source names up to 3>."
+                    )
+                    raw_retry = self.llm.model.invoke(retry_prompt)
+                    response_text = str(raw_retry.content).strip()
+                    current_app.logger.info(f"✅ Retry LLM response length: {len(response_text)} characters")
+                else:
+                    return {"answer": "I don't have enough information.", "source": None}
             sources_used = []
             match = re.search(r"Sources Used:\s*(.*)", response_text)
             if match:
