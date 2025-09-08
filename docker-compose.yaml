@@ -96,7 +96,7 @@ services:
       dockerfile: Dockerfile
     container_name: dev-celery-worker-gpu
     restart: always
-    command: celery -A celery_worker.celery worker --concurrency=1 --loglevel=info -Q gpu_queue
+    command: celery -A celery_worker.celery worker --pool=solo --loglevel=info -Q gpu_queue
     env_file:
       - .env
     environment:
