@@ -2,8 +2,8 @@ import os
 from typing import Tuple, Union
 from flask import current_app
 from vanna.chromadb import ChromaDB_VectorStore
-from vanna.openai import OpenAI_Chat
-from vanna.ollama import Ollama
+# from vanna.openai import OpenAI_Chat
+# from vanna.ollama import Ollama
 import pandas as pd
 import plotly
 import tiktoken
@@ -51,7 +51,7 @@ class LLMModel_Chat(VannaBase):
 ## Any LLM Vanna
 class MyVanna(LLMModel_Chat, ChromaDB_VectorStore):
     document_store = {}
-    def __init__(self, model_source = "together", config={"path": "../vanna-chroma"}):
+    def __init__(self, model_source = "together", config={"path": current_app.config['VANNA_CHROMA']}):
         current_app.logger.info(f"Current model source: {model_source}")
         LLMModel_Chat.__init__(self, model_source)
         ChromaDB_VectorStore.__init__(self, config=config)

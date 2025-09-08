@@ -256,7 +256,7 @@ def profiling_embedding(vn):
     # create new chromadb only for embedding
     try:
         # chroma_client = ChromaDB(collection_name="profiling_embedding")
-        chroma_client = chromadb.Client(Settings(persist_directory="./profiling_embedding", allow_reset=True))
+        chroma_client = chromadb.Client(Settings(persist_directory=current_app.config['PROFILING_EMBEDDING'], allow_reset=True))
         chroma_client.reset()
 
         # Create connection string
@@ -607,7 +607,6 @@ def query_vanna(data=None):
         
         # Get driving table if exists
         vanna_query = data['query']
-        current_app.logger.info(os.getenv("DRIVING_TABLE"))
         if os.getenv("DRIVING_TABLE"):
             try:
                 driving_table = vn.ddl_collection.get(

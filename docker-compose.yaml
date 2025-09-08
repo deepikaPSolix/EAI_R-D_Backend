@@ -37,13 +37,13 @@ services:
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
       - nltk_data:/usr/share/nltk_data 
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   celery-worker:
     build:
@@ -82,13 +82,13 @@ services:
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
       - nltk_data:/usr/share/nltk_data 
-        # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   celery-worker-gpu:
     build:
@@ -127,13 +127,13 @@ services:
       - ./cache/chroma/models:/root/.cache/chroma
       - ./cache/paddleocr:/root/.paddleocr
       - nltk_data:/usr/share/nltk_data 
-        # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
 
   dev-redis:
     image: "redislabs/redisgraph:latest"
