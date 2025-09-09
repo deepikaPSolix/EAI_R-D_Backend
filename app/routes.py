@@ -259,12 +259,14 @@ def profiling_embedding(vn):
     # create new chromadb only for embedding
     try:
         # chroma_client = ChromaDB(collection_name="profiling_embedding")
-        chroma_client = chromadb.Client(Settings(
-            persist_directory=current_app.config['PROFILING_EMBEDDING'],
-            allow_reset=True,
-            tenant="default_tenant",
-            database="default_database"
-        ))
+        chroma_client = chromadb.Client(
+            Settings(
+                persist_directory=current_app.config['PROFILING_EMBEDDING'],
+                allow_reset=True,
+                is_persistent=True,
+                anonymized_telemetry=False,
+            )
+        )
         chroma_client.reset()
 
         # Create connection string
