@@ -11,4 +11,4 @@ class Config:
     UPLOAD_DIR_PATH = os.path.join(BASE_DIR, 'uploads')
     ML_DIR_PATH = os.path.join(BASE_DIR, 'ml-model')
     PROFILING_EMBEDDING = os.path.join(BASE_DIR, 'profiling_embedding')
-    VANNA_CHROMA = os.path.join(BASE_DIR, '/vanna-chroma')
+    VANNA_CHROMA = os.path.join(BASE_DIR, 'vanna-chroma')
