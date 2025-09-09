@@ -318,9 +318,9 @@ def train_vanna_doc():
             ids = []
             for i, chunk in enumerate(vn.split_document_into_chunks(data["data"], max_chunk_size=500)):
                 res = vn.train(documentation=chunk)
-                vn.add_document(db_id=res, doc_id=f"{data['file_name']}#chunk-{i}")
                 ids.append(res)
 
+            vn.add_document(db_id=res, doc_id=f"{data['file_name']}")
             current_app.logger.info(f"✅ Added document chunks {len(ids)} chunks for {data['file_name']}")
         
             # res = vn.train(documentation=data["data"])
