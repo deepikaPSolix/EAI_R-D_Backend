@@ -236,8 +236,11 @@ def train_vanna_generate_doc():
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     try:
         current_app.logger.info("Relation mapping data: " + str(rel_map_data))
-        rel_map_id = vn.train(documentation=rel_map_data)
-        vn.add_document(db_id=rel_map_id, doc_id="relation_mapping")
+        if rel_map_data is not None:
+            rel_map_id = vn.train(documentation=rel_map_data)
+            vn.add_document(db_id=rel_map_id, doc_id="relation_mapping")
+        else:
+            rel_map_id = -1
 
         return jsonify({"id": fallback_id, "relation_mapping_id": rel_map_id, "status": "trained with generated metadata"}), 202
     except Exception as e:
@@ -265,6 +268,8 @@ def profiling_embedding(vn):
         user = os.getenv("DB_USER")
         password = os.getenv("DB_PASSWORD")
         port = os.getenv("DB_PORT")
+        if host is None or dbname is None or user is None or password is None or port is None:
+            return None
         conn_str = f"postgresql+psycopg2://{user}:{password}@" \
                 f"{host}:{port}/{dbname}"
 
@@ -318,9 +323,9 @@ def train_vanna_doc():
             ids = []
             for i, chunk in enumerate(vn.split_document_into_chunks(data["data"], max_chunk_size=500)):
                 res = vn.train(documentation=chunk)
-                vn.add_document(db_id=res, doc_id=f"{data['file_name']}#chunk-{i}")
+                
                 ids.append(res)
-
+            vn.add_document(db_id=res, doc_id=f"{data['file_name']}")
             current_app.logger.info(f"✅ Added document chunks {len(ids)} chunks for {data['file_name']}")
         
             # res = vn.train(documentation=data["data"])
@@ -639,7 +644,7 @@ def query_vanna(data=None):
         # Iterate until a valid DataFrame is returned or max attempts reached
         counter = 0
         while (type(df) == Exception or type(df) == vanna.exceptions.ValidationError) and counter < 2:
-            current_app.logger.info("Vanna.AI run_sql error occurred:", df)
+            current_app.logger.info("Vanna.AI run_sql error occurred: " + str(df))
             current_app.logger.info(f"Vanna.AI run_sql query attempt {counter + 1}:")
             # ✅ Ask Vanna.AI a question
             sql, df, fig = vn.ask(

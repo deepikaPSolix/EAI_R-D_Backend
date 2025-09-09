@@ -51,7 +51,9 @@ class LLMModel_Chat(VannaBase):
 ## Any LLM Vanna
 class MyVanna(LLMModel_Chat, ChromaDB_VectorStore):
     document_store = {}
-    def __init__(self, model_source = "together", config={"path": current_app.config['VANNA_CHROMA']}):
+    def __init__(self, model_source = "together", config=None):
+        if config is None:
+            config = {"path": current_app.config['VANNA_CHROMA']}
         current_app.logger.info(f"Current model source: {model_source}")
         LLMModel_Chat.__init__(self, model_source)
         ChromaDB_VectorStore.__init__(self, config=config)
