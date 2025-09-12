@@ -77,7 +77,7 @@ def trials_and_analyze_inline():
     interventions   = request.args.get("interventions")         
     status          = request.args.get("status")                
     study_type      = request.args.get("study_type")
-    nct_ids         = request.args.get("nct_ids")
+    nct_ids         = request.args.get("nct_ids")  
     size  = request.args.get("size", default=10, type=int)
 
     try:
@@ -1132,7 +1132,7 @@ def graph_query():
         summary_resp = rag.model.invoke(summary_prompt)
         summary_text = summary_resp.content.strip()
         response_json["summary"] = summary_text
-
+        
         return jsonify(response_json)
 
     except Exception as e:
