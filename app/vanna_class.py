@@ -2,22 +2,95 @@ import os
 from typing import Tuple, Union
 from flask import current_app
 from vanna.chromadb import ChromaDB_VectorStore
-from vanna.openai import OpenAI_Chat
+# from vanna.openai import OpenAI_Chat
+# from vanna.ollama import Ollama
 import pandas as pd
 import plotly
-
+import tiktoken
+from app.llm_model import LLMModel
 from app.db_utils import open_db_connection
+from vanna.base import VannaBase
 
-class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
+class LLMModel_Chat(VannaBase):
+    def __init__(self, model_source=None, config=None):
+        VannaBase.__init__(self, config=config)
+        self.model = LLMModel(model_source).model
+
+    def system_message(self, message: str) -> any:
+        return {"role": "system", "content": message}
+
+    def user_message(self, message: str) -> any:
+        return {"role": "user", "content": message}
+
+    def assistant_message(self, message: str) -> any:
+        return {"role": "assistant", "content": message}
+
+    def submit_prompt(self, prompt, **kwargs) -> str:
+        if prompt is None:
+            raise Exception("Prompt is None")
+
+        if len(prompt) == 0:
+            raise Exception("Prompt is empty")
+
+        response = self.model.invoke(prompt)
+        
+        return response.content
+
+## OPENAI Vanna
+# class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
+#     document_store = {}
+#     def __init__(self,
+#         config = {
+#             "api_key": os.getenv("OPENAI_API_KEY"),
+#             "model": "gpt-4o",
+#             "path": "../vanna-chroma"
+#         }):
+#         ChromaDB_VectorStore.__init__(self, config=config)
+#         OpenAI_Chat.__init__(self, config=config)
+
+## Any LLM Vanna
+class MyVanna(LLMModel_Chat, ChromaDB_VectorStore):
     document_store = {}
-    def __init__(self,
-        config = {
-            "api_key": os.getenv("OPENAI_API_KEY"),
-            "model": "gpt-4o",
-            "path": "../vanna-chroma"
-        }):
+    def __init__(self, model_source = "together", config=None):
+        if config is None:
+            config = {"path": current_app.config['VANNA_CHROMA']}
+        current_app.logger.info(f"Current model source: {model_source}")
+        LLMModel_Chat.__init__(self, model_source)
         ChromaDB_VectorStore.__init__(self, config=config)
-        OpenAI_Chat.__init__(self, config=config)
+
+
+## Ollama Vanna
+# class MyVanna(Ollama, ChromaDB_VectorStore):
+#     # def count_tokens_for_model(self, text: str) -> int:
+#     #     MODEL_NAME = "gpt-4o"
+#     #     encoding = tiktoken.encoding_for_model(MODEL_NAME)
+#     #     return len(encoding.encode(text))
+#     document_store = {}
+#     def __init__(self, 
+#         config = {
+#             "ollama_host": os.getenv("OLLAMA_HOST", "http://192.168.1.116:11434"),
+#             "model": "deepseek-r1:14b",
+#             "path": "../vanna-chroma"
+#         }):
+#         ChromaDB_VectorStore.__init__(self, config=config)
+#         Ollama.__init__(self, config=config)
+
+## -- Common Methods --
+
+    # def chat_completion(self, messages, **kwargs):
+    #     """
+    #     Wrapper kept only for legacy code that still expects
+    #     `self.chat_completion(messages)["content"]`.
+
+    #     Under the hood it just forwards to `submit_prompt()` and wraps the
+    #     returned string in the tiny dict old callers expect.
+    #     """
+    #     content = self.submit_prompt(messages, **kwargs)
+
+    #     # Count tokens in the LLM response
+    #     tokens = self.count_tokens_for_model(content)
+    #     current_app.logger.info(f"RESPONSE TOKENS FROM LLM: {tokens}")
+    #     return {"content": content}
 
     def chat_completion(self, messages, **kwargs):
         """
@@ -29,6 +102,26 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
         """
         return {"content": self.submit_prompt(messages, **kwargs)}
 
+    def split_document_into_chunks(self, document: str, max_chunk_size: int = 500) -> list[str]:
+        """
+        Splits a document into chunks based on max_chunk_size (in characters).
+        You can enhance this to split by section, paragraph, or token count.
+        """
+        chunks = []
+        words = document.split()
+        current_chunk = []
+
+        for word in words:
+            if sum(len(w) + 1 for w in current_chunk) + len(word) + 1 > max_chunk_size:
+                chunks.append(" ".join(current_chunk))
+                current_chunk = []
+            current_chunk.append(word)
+
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+
+        return chunks
+    
     def add_document(self, db_id, doc_id):
         MyVanna.document_store[db_id] = doc_id
 
@@ -115,6 +208,8 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
             "6. If you do not see any primary and foreign key relationships(joins) in the DDL, Take the same column names as joins and gemerate the sql queries. \n"
             f"7. Ensure that the output SQL is {self.dialect}-compliant and executable, and free of syntax errors. \n"
             "8. For any string comparison in a WHERE clause, wrap both the column and the literal in LOWER() (or UPPER()) to make the match case-insensitive. \n"
+            "9. Use ONLY the tables, columns, and values that exist in the provided schema context. Do not use columns or values that do not exist in the context. \n"\
+            "10. Make sure all rows are distinct and there are no duplicates. \n"
         )
 
         message_log = [self.system_message(initial_prompt)]
@@ -129,6 +224,11 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
 
         message_log.append(self.user_message(question))
         current_app.logger.info(f"from VANNA : {message_log}")
+
+        # Count tokens in the message log
+        # text = message_log
+        # tokens = self.count_tokens_for_model(text)
+        # current_app.logger.info(f"Tokens in the string: {tokens}")
 
         return message_log
     
@@ -145,20 +245,21 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
 
         table_docs: list[str] = []
 
-        current_app.logger.info(f"Making LLM call to generate metadata from DDL and sample rows: {len(samples)} ",)
+        current_app.logger.info(f"Making LLM call to generate metadata from DDL and sample Tables: {len(samples)} ",)
 
         for table, meta in samples.items():
             context_md = self.build_metadata(ddl_list, {table: meta})
             sys_prompt =  (
-                            """ You are a senior data  analyst. Given the SQL DDL and a small sample of table data, analyze the structure and actual data patterns to infer relationships, constraints, and meaning.
-                                For each table, output metadata in Markdown starting with: Table: <table_name>
+                            """ You are a senior data  analyst. Given the SQL DDL and a small sample of table data, analyze the structure and content to extract standardized fro each column,
+                              output metadata in Markdown starting with: Table: <table_name>
                                 Then generate a 5-column table with headers:
-                                | Column Name | Data Type | Constraints | Default/Foreign Key | Description |
-                                Identify inferred primary keys, foreign keys, and unique columns based on value patterns.
-                                Leave “—” for blanks.
-                                Give clear descriptions of what each column represents based on data content.
-                                Infer logical joins, even if not defined in the DDL.
-                                Do not output SQL or narrative—only the structured metadata per table."""
+                                | Column Name | Data Type | Column Alias Name | Description |
+                                 Populate the table as follows
+                                 Column Name: The column name as defined in the table.
+                                 Data Type: As defined in the DDL.
+                                 Column Alias Name: Inferred standardized name for use in relationship analysis across tables. Use actual data patterns and naming similarities to assign meaningful, consistent aliases (e.g., user_id, created_at, product_code).
+                                 Description: A concise explanation of the column's meaning, based on the column name and actual sample data.
+                                 Use — if any information is missing or cannot be inferred from the available data.."""
                         )
 
             messages = [
@@ -173,12 +274,12 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
 
         db_id = self.train(documentation=generated_doc)
         current_app.logger.info(f"Generated metadata document is added to vanna chroma: {db_id}")
-        self.add_document(db_id=db_id, doc_id=db_id)
+        self.add_document(db_id=db_id, doc_id="generated_metadata")
 
         return db_id
 
     
-    def _extract_sample_data_from_db(self, limit: int = 3) -> dict:
+    def _extract_sample_data_from_db(self, limit: int = 50) -> dict:
         try:
             conn = open_db_connection()
             cur  = conn.cursor() 
@@ -188,12 +289,15 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
             cur = conn.cursor()
             cur.execute(""" SELECT table_name FROM   information_schema.tables WHERE  table_schema = 'public'; """)
             samples = {}
-            for (table,) in cur.fetchall():
+            table_names = cur.fetchall()
+
+            for (table,) in table_names:
                 cur.execute(f"SELECT * FROM {table} LIMIT {limit}")
                 rows = cur.fetchall()
                 cols = [c.name for c in cur.description]
                 samples[table] = {"columns": cols, "rows": rows}
-            cur.close(); conn.close()
+            cur.close()
+            conn.close()
         except Exception as e:
             current_app.logger.error("Failed to connect to the database")
             return None
@@ -214,7 +318,7 @@ class MyVanna(OpenAI_Chat, ChromaDB_VectorStore):
                 parts.append("*no rows*")
         return "\n".join(parts)
 
-
+ # ------------------------------- END pre-processing metadadata -------------------------------
 
 
     def ask(
