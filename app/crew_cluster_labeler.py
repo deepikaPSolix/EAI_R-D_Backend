@@ -1,4 +1,4 @@
-from crewai import Agent, Task, Crew, Process,LLM
+from crewai import Agent, Task, Crew, Process, LLM
 from app.llm_model import LLMModel
 import os
 from pydantic import BaseModel, ValidationError
@@ -9,13 +9,15 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 
-# Load your LLM dynamically from llm_model.py
-llm_instance = LLMModel.from_together()  # or from_openai, from_ollama, etc.
+# Use our OpenAI LLMModel instance
+# CrewAI supports LangChain models directly, which is what our LLMModel.from_openai() returns
+openai_model = LLMModel.from_openai()
 
-llm = LLM(model="together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
-          api_key=os.environ.get("TOGETHER_API_KEY"),
-          base_url="https://api.together.xyz/v1"
-        )
+# Create a CrewAI LLM instance that uses our OpenAI model via langchain_openai
+llm = LLM(model="gpt-5-nano", 
+          api_key=os.environ.get("OPENAI_API_KEY"),
+          base_url="https://api.openai.com/v1"
+          )
 label_generator = Agent(
     role="Label Generator",
     goal=(

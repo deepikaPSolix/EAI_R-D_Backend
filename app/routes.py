@@ -961,14 +961,21 @@ def graph_query():
         
         # If it contains tables, ensure HTML is preserved correctly
         if contains_html_table:
-            current_app.logger.info("HTML table detected in response - preserving HTML formatting")
-            # Remove any "Sources Used:" line that might be after the table
-            # Note: re module is already imported at the beginning of the function
+
             sources_pattern = r'Sources Used:.*$'
             clean_text_without_sources = re.sub(sources_pattern, '', clean_text, flags=re.MULTILINE).strip()
             
-            # Make sure HTML tables are formatted correctly
-            response_text = clean_text_without_sources
+            # Ensure proper HTML table structure is preserved (don't clean too much)
+            table_pattern = r'<table.*?</table>'
+            tables = re.findall(table_pattern, clean_text_without_sources, re.DOTALL)
+            
+            if tables:
+                # Log tables found for debugging
+                current_app.logger.info(f"Found {len(tables)} HTML tables in response")
+                response_text = clean_text_without_sources
+            else:
+                current_app.logger.warning("HTML tables expected but not properly parsed")
+                response_text = clean_text_without_sources
         else:
             response_text = clean_text
             
@@ -976,10 +983,11 @@ def graph_query():
         response_json = {
             "response": response_text, 
             "contains_html": contains_html_table,
-            "content_type": "html" if contains_html_table else "text"
+            "content_type": "html" if contains_html_table else "text",
+            "is_table": contains_html_table  # Explicitly flag table content
         }
 
-        # Format sources (top 3)
+        # Format sources (top 3) - direct pass-through of LLM sources
         formatted_sources = []
         for src in sources[:3]:
             if isinstance(src, dict):
@@ -988,59 +996,84 @@ def graph_query():
             elif isinstance(src, str):
                 url_pattern = r"^https?://"
                 if re.match(url_pattern, src):
-                    formatted_sources.append({"name": src, "url": src})                
-                else:                    
-                    # Don't use os.path.basename which might normalize spaces
-                    # Extract filename from the path while preserving all spaces
-                    if '||' in src:
-                        # Handle the case where source might be in format "filename||content"
-                        filename = src.split('||')[0]
+                    # For URLs, use the URL directly with minimal processing
+                    from urllib.parse import urlparse
+                    parsed_url = urlparse(src)
+                    display_name = parsed_url.netloc
+                    if parsed_url.path and parsed_url.path != "/":
+                        display_name = f"{display_name}{parsed_url.path}"
+                    
+                    formatted_sources.append({"name": display_name, "url": src})
+                    current_app.logger.info(f"URL source used directly: {src}")
+                else:
+                    # Check if this ends with .html or .htm - likely a URL that lost its domain
+                    if src.endswith(('.html', '.htm')):
+                        # Try to find a matching URL in our context based on the HTML filename
+                        found_url = None
+                        if hasattr(current_app, "graph_builder") and current_app.graph_builder:
+                            for chunk in current_app.graph_builder.all_chunks:
+                                if not chunk or not isinstance(chunk.get("source", ""), str):
+                                    continue
+                                
+                                source = chunk.get("source", "")
+                                # Look for a URL that contains this HTML filename
+                                if source.startswith(('http://', 'https://')) and src in source:
+                                    found_url = source
+                                    current_app.logger.info(f"Found matching URL for {src}: {found_url}")
+                                    break
+                        
+                        if found_url:
+                            formatted_sources.append({"name": src, "url": found_url})
+                            current_app.logger.info(f"HTML file mapped to existing URL: {found_url}")
+                        else:
+                            # If no URL found, create a reference without hardcoding domain
+                            file_url = url_for('main.download_graph_file', filename=src, _external=True)
+                            formatted_sources.append({"name": src, "url": file_url})
+                            current_app.logger.info(f"HTML file with no URL match: using download handler")
                     else:
-                        # For regular paths, extract last part
-                        filename = src.split('/')[-1].split('\\')[-1]
-                    try:
-                        # Check if file exists in the upload directory to ensure correct spaces
-                        upload_dir = current_app.config['GRAPH_DOC_UPLOAD']
-                        exact_filename = None
+                        # Regular file handling
+                        if '||' in src:
+                            # Handle the case where source might be in format "filename||content"
+                            filename = src.split('||')[0]
+                        else:
+                            # For regular paths, use basename preserving spaces
+                            filename = os.path.basename(src)
                         
-                        # Look for the exact filename on disk
-                        for existing_file in os.listdir(upload_dir):
-                            # Compare filenames ignoring spaces to find the match
-                            if existing_file.replace(" ", "") == filename.replace(" ", ""):
-                                exact_filename = existing_file
-                                current_app.logger.info(f"Found exact filename: '{exact_filename}' for '{filename}'")
-                                break
-                        
-                        # Use the exact filename from disk with correct spacing
-                        filename_to_use = exact_filename if exact_filename else filename
-                        
-                        # Generate URL with the exact filename from disk
-                        file_url = url_for('main.download_graph_file', filename=filename_to_use, _external=True)
-                        formatted_sources.append({"name": filename_to_use, "url": file_url})
-                    except Exception as e:
-                        current_app.logger.warning(f"⚠️ Skipped building file URL due to: {e}")
+                        # Generate URL with the filename
+                        file_url = url_for('main.download_graph_file', filename=filename, _external=True)
+                        formatted_sources.append({"name": filename, "url": file_url})
+                        current_app.logger.info(f"File source: {filename}")
         if formatted_sources:
             response_json["sources"] = formatted_sources
 
         # Add a summary for voice features - strip HTML tags if present
-        rag = RAG(ChromaDB(), model_source="openai")
-        
-        # Remove HTML tags for the summary generation
-        import re
-        text_for_summary = re.sub(r'<.*?>', ' ', clean_text)
-        
-        summary_prompt = (
-            f"Summarize the following answer in less than or equal to 30 words. Use plain text only, no HTML or markdown formatting.\n"
-            f"Curated Query: \"{data['query']}\"\n"
-            f"Answer: \"{text_for_summary}\"")
-        summary_resp = rag.model.invoke(summary_prompt)
-        summary_text = summary_resp.content.strip()
-        
-        # Remove any HTML from the summary itself
-        summary_text = re.sub(r'<.*?>', ' ', summary_text)
-        
-        response_json["summary"] = summary_text
+        try:
+            rag = RAG(ChromaDB(), model_source="openai")
+            
+            # Remove HTML tags for the summary generation
+            import re
+            text_for_summary = re.sub(r'<.*?>', ' ', clean_text)
+            
+            summary_prompt = (
+                f"Summarize the following answer in less than or equal to 30 words. Use plain text only, no HTML or markdown formatting.\n"
+                f"Curated Query: \"{data['query']}\"\n"
+                f"Answer: \"{text_for_summary}\"")
+            summary_resp = rag.model.invoke(summary_prompt)
+            summary_text = summary_resp.content.strip()
+            
+            # Remove any HTML from the summary itself
+            summary_text = re.sub(r'<.*?>', ' ', summary_text)
+            
+            response_json["summary"] = summary_text
+        except Exception as e:
+            # If summary generation fails, use a short excerpt from the response
+            current_app.logger.warning(f"⚠️ Summary generation failed: {e}")
+            # Extract first 30 words as a fallback summary
+            text_excerpt = ' '.join(re.sub(r'<.*?>', '', clean_text).split()[:30])
+            response_json["summary"] = text_excerpt
 
+        # Log that we're sending the response
+        current_app.logger.info(f"📤 Sending response with {len(response_json['response'])} chars, {len(response_json.get('sources', []))} sources")
         return jsonify(response_json)
 
     except Exception as e:
@@ -1053,44 +1086,163 @@ def download_graph_file(filename):
     
     # URL decode the filename to preserve spaces and special characters
     import urllib.parse
+    import re
+    
     decoded_filename = urllib.parse.unquote(filename)
     current_app.logger.info(f"[DOWNLOAD] Decoded filename: '{decoded_filename}'")
     
-    # Find the file in the directory - extra safety to ensure exact match
-    upload_dir = current_app.config['GRAPH_DOC_UPLOAD']
-    file_path = os.path.join(upload_dir, decoded_filename)
-    
-    # If file doesn't exist with exact name, try more flexible matching
-    if not os.path.exists(file_path):
-        current_app.logger.warning(f"[DOWNLOAD] File not found with exact match: '{file_path}'")
-        found = False
+    # Check for HTML files (likely web resources)
+    if decoded_filename.endswith(('.html', '.htm')):
+        current_app.logger.info(f"[DOWNLOAD] HTML file detected, treating as web resource: '{decoded_filename}'")
         
-        # Check files in the directory, ignoring spaces
-        for existing_file in os.listdir(upload_dir):
-            # First try exact name without spaces
-            if existing_file.replace(" ", "") == decoded_filename.replace(" ", ""):
-                decoded_filename = existing_file
-                current_app.logger.info(f"[DOWNLOAD] Found match ignoring spaces: '{existing_file}'")
-                found = True
-                break
+        # First check if we have a matching URL in our context
+        if hasattr(current_app, "graph_builder") and current_app.graph_builder:
+            # Look for any URL that might contain this HTML filename
+            for chunk in current_app.graph_builder.all_chunks:
+                if not chunk or not isinstance(chunk.get("source", ""), str):
+                    continue
+                    
+                source = chunk.get("source", "")
+                if source.startswith(('http://', 'https://')) and decoded_filename in source:
+                    current_app.logger.info(f"[DOWNLOAD] Found matching URL: {source}")
+                    return jsonify({
+                        "type": "url",
+                        "url": source,
+                        "message": "This is a URL source, not a local file."
+                    }), 302
+        
+        # Rather than construct a URL with hardcoded values, provide information to the client
+        # The client can either search for this resource or notify the user
+        current_app.logger.info(f"[DOWNLOAD] HTML file cannot be mapped to a full URL: {decoded_filename}")
+        return jsonify({
+            "type": "html_resource",
+            "filename": decoded_filename,
+            "message": "This appears to be a web resource but we couldn't determine its full URL."
+        }), 404
+    
+    # Check if the filename is actually a URL or part of a URL
+    url_pattern = r"^https?://"
+    
+    # First check if it's a complete URL
+    if re.match(url_pattern, decoded_filename):
+        current_app.logger.info(f"[DOWNLOAD] Detected URL source: '{decoded_filename}'")
+        # Redirect to the URL directly since it's not a file on disk
+        return jsonify({
+            "type": "url",
+            "url": decoded_filename,
+            "message": "This is a URL source, not a file."
+        }), 302
+    
+    # Check if it might be a URL path component from sources
+    # This handles cases where we get components like "finance" from "https://www.solix.com/solutions/finance"
+    if hasattr(current_app, "graph_builder") and current_app.graph_builder:
+        current_app.logger.info(f"[DOWNLOAD] Checking if '{decoded_filename}' is part of a URL source")
+        for chunk in current_app.graph_builder.all_chunks:
+            if not chunk:
+                continue
                 
-            # If still not found, try case insensitive
-            if not found and existing_file.lower() == decoded_filename.lower():
-                decoded_filename = existing_file
-                current_app.logger.info(f"[DOWNLOAD] Found case-insensitive match: '{existing_file}'")
-                found = True
+            source = chunk.get("source", "")
+            if not source or not isinstance(source, str):
+                continue
+                
+            # If source is a URL and contains the requested filename as a path component
+            if re.match(url_pattern, source) and decoded_filename in source:
+                current_app.logger.info(f"[DOWNLOAD] Found URL source containing '{decoded_filename}': '{source}'")
+                return jsonify({
+                    "type": "url",
+                    "url": source,
+                    "message": "This is a URL source, not a file."
+                }), 302
+    
+    # Find the file in the directory - only look for exact matches
+    upload_dir = current_app.config['GRAPH_DOC_UPLOAD']
+    file_path = None
+    found_dir = None
+    
+    # List of directories to search for the file
+    search_dirs = [
+        upload_dir,  # Primary upload directory
+        os.path.join(current_app.config.get('CACHE_DIR', 'cache'), 'graph-file-uploads'),  # Alternate location
+        os.path.join('cache', 'graph-file-uploads'),  # Fallback location
+        os.path.abspath(os.path.join('.', 'cache', 'graph-file-uploads')),  # Local development path
+        os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(__file__)), 'cache', 'graph-file-uploads'))  # Project root path
+    ]
+    
+    # Log all files in each directory for debugging
+    for directory in search_dirs:
+        if os.path.exists(directory):
+            current_app.logger.info(f"[DOWNLOAD] Checking directory: '{directory}'")
+            if os.path.exists(os.path.join(directory, decoded_filename)):
+                file_path = os.path.join(directory, decoded_filename)
+                found_dir = directory
+                current_app.logger.info(f"[DOWNLOAD] Found file with exact match: '{file_path}'")
                 break
     
-    # Use the corrected filename path
-    file_path = os.path.join(upload_dir, decoded_filename)
-    if not os.path.exists(file_path):
-        current_app.logger.error(f"[DOWNLOAD] File not found after all matching attempts: '{decoded_filename}'")
-        return jsonify({"error": "File not found"}), 404
+    # Check if we found the file
+    if not file_path or not os.path.exists(file_path):
+        current_app.logger.error(f"[DOWNLOAD] File not found with exact match: '{decoded_filename}'")
+        
+        # Check if this might be a URL or part of a URL in the RAG sources
+        if hasattr(current_app, "graph_builder") and current_app.graph_builder:
+            current_app.logger.info(f"[DOWNLOAD] Checking sources for URL containing '{decoded_filename}'")
+            
+            # Find if any source contains this string as part of a URL
+            all_sources = []
+            url_sources = []
+            
+            for chunk in current_app.graph_builder.all_chunks:
+                if not chunk:
+                    continue
+                
+                source = chunk.get("source", "")
+                if not source or not isinstance(source, str):
+                    continue
+                
+                all_sources.append(source)
+                
+                # Check if this is a URL source
+                url_pattern = r"^https?://"
+                if re.match(url_pattern, source):
+                    url_sources.append(source)
+                    
+                    # If the source URL contains the requested filename
+                    if decoded_filename in source:
+                        current_app.logger.info(f"[DOWNLOAD] Found URL source containing '{decoded_filename}': '{source}'")
+                        return jsonify({
+                            "type": "url",
+                            "url": source,
+                            "message": "This is a URL source, not a file."
+                        }), 302
+            
+            # Log source information for debugging
+            current_app.logger.info(f"[DOWNLOAD] Found {len(url_sources)} URL sources in RAG context")
+            for url in url_sources[:5]:  # Limit to first 5 to avoid excessive logging
+                current_app.logger.info(f"[DOWNLOAD] URL source: {url}")
+                
+        # Log available files for diagnostic purposes
+        current_app.logger.info(f"[DOWNLOAD] Available files:")
+        for directory in search_dirs:
+            if os.path.exists(directory):
+                files_in_dir = os.listdir(directory)
+                current_app.logger.info(f"  - Files in '{directory}':")
+                for file in files_in_dir:
+                    current_app.logger.info(f"    {file}")
+                
+        return jsonify({
+            "error": f"File not found: {decoded_filename}",
+            "message": "The requested file could not be found. Please check if the file has been uploaded."
+        }), 404
+    
+    # Use the exact file path we found
+    filename_to_serve = os.path.basename(file_path)
+    directory_to_serve = os.path.dirname(file_path)
+    
+    current_app.logger.info(f"[DOWNLOAD] Serving file: '{filename_to_serve}' from directory: '{directory_to_serve}'")
     
     # Set as_attachment=False to allow browser to preview the file instead of forcing download
     return send_from_directory(
-        upload_dir,
-        decoded_filename,
+        directory_to_serve,  # Use the directory where we found the file
+        filename_to_serve,   # Use the actual filename as found on disk
         as_attachment=False  # Allow browser to preview the file
     )
 
