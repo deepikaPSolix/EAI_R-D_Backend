@@ -27,6 +27,8 @@ services:
       # - dev_idc_data:/usr/share/nltk_data 
       # - dev_idc_data:/myapp/cache/logs
       - ./cache:/myapp/cache
+      - ./cache:/myapp/vanna-chroma
+      - ./cache:/myapp/profiling_embedding
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
       - ./cache/graph-file-uploads:/myapp/cache/graph-file-uploads
@@ -72,6 +74,8 @@ services:
       # - dev_idc_data:/usr/share/nltk_data 
       # - dev_idc_data:/myapp/cache/logs
       - ./cache:/myapp/cache
+      - ./cache:/myapp/vanna-chroma
+      - ./cache:/myapp/profiling_embedding
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
       - ./cache/uploads:/myapp/cache/uploads
@@ -117,6 +121,8 @@ services:
       # - dev_idc_data:/usr/share/nltk_data 
       # - dev_idc_data:/myapp/cache/logs
       - ./cache:/myapp/cache
+      - ./cache:/myapp/vanna-chroma
+      - ./cache:/myapp/profiling_embedding
       - ./cache/output:/myapp/cache/output
       - ./cache/ml-model:/myapp/cache/ml-model
       - ./cache/graph-file-uploads:/myapp/cache/graph-file-uploads

@@ -4,6 +4,8 @@ import os
 from flask import Blueprint, current_app, jsonify, request, send_from_directory, url_for, Response
 from openai import NotFoundError
 from celery.result import AsyncResult
+import chromadb
+from chromadb.config import Settings
 from app.chroma_db import ChromaDB
 from app.graph_builder import GraphBuilder
 from app.models.doc_file import DocFile
@@ -29,6 +31,8 @@ from langchain.schema import SystemMessage, HumanMessage
 from langchain_openai import ChatOpenAI
 import pandas as pd
 import vanna
+from sqlalchemy import create_engine
+import app.data_profiling_embedding as dpe
 
 from app.hpostgres import store_in_postgres
 
@@ -73,7 +77,7 @@ def trials_and_analyze_inline():
     interventions   = request.args.get("interventions")         
     status          = request.args.get("status")                
     study_type      = request.args.get("study_type")
-    nct_ids         = request.args.get("nct_ids")
+    nct_ids         = request.args.get("nct_ids")  
     size  = request.args.get("size", default=10, type=int)
 
     try:
@@ -219,6 +223,86 @@ def classify():
 
     return jsonify({"labels": labels.to_json(orient='records')}), 201
 
+@main.route('/vanna/train/generatedoc', methods=["POST"])
+def train_vanna_generate_doc():
+    try:
+        vn = MyVanna()
+        # Metadata
+        fallback_id = vn.train_with_fallback_doc()
+        # Relation mapping
+        rel_map_data = profiling_embedding(vn)
+    except Exception as e:
+        current_app.logger.error("Profiling embedding error: " + str(e))
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    try:
+        current_app.logger.info("Relation mapping data: " + str(rel_map_data))
+        if rel_map_data is not None:
+            rel_map_id = vn.train(documentation=rel_map_data)
+            vn.add_document(db_id=rel_map_id, doc_id="relation_mapping")
+        else:
+            rel_map_id = -1
+
+        return jsonify({"id": fallback_id, "relation_mapping_id": rel_map_id, "status": "trained with generated metadata"}), 202
+    except Exception as e:
+        current_app.logger.error("Training and add document error: " + str(e))
+        return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
+def safe_rollback(engine):
+    try:
+        with engine.connect() as conn:
+            if conn.in_transaction():
+                conn.rollback()
+    except Exception as e:
+        current_app.logger.info(f"safe_rollback: {e}")
+
+def profiling_embedding(vn):
+    # create new chromadb only for embedding
+    try:
+        # chroma_client = ChromaDB(collection_name="profiling_embedding")
+        chroma_client = chromadb.Client(
+            Settings(
+                persist_directory=current_app.config['PROFILING_EMBEDDING'],
+                allow_reset=True,
+                is_persistent=True,
+                anonymized_telemetry=False,
+            )
+        )
+        chroma_client.reset()
+
+        # Create connection string
+        host = os.getenv("DB_HOST")
+        dbname = os.getenv("DB_NAME")
+        user = os.getenv("DB_USER")
+        password = os.getenv("DB_PASSWORD")
+        port = os.getenv("DB_PORT")
+        if host is None or dbname is None or user is None or password is None or port is None:
+            return None
+        conn_str = f"postgresql+psycopg2://{user}:{password}@" \
+                f"{host}:{port}/{dbname}"
+
+        engine = create_engine(conn_str)
+    except Exception as e:
+        current_app.logger.error(f"Error creating chroma client or engine: {e}", exc_info=True)
+        raise e
+    try:
+        embedding_result, profiling_result = dpe.get_all_results(chroma_client, engine, limit=100)
+    except Exception as e:
+        current_app.logger.error(f"Error in get_all_results: {e}", exc_info=True)
+        safe_rollback(engine)
+        raise e
+
+    try:
+        system_prompt = f"The following is information on the columns of the tables from a database. Find the likely primary and foreign key relations between table columns."
+        prompt = f"Profiling Result: {profiling_result}\n Similarity Search Result: {embedding_result}"
+        context = system_prompt + "\n" + prompt
+        
+        current_app.logger.info("Profiling embedding context:\n" + context)
+        response = vn.submit_prompt(context)
+    except Exception as e:
+        current_app.logger.error(f"Error submitting prompt: {e}", exc_info=True)
+        raise e
+    return response
+
 @main.route('/vanna/train/doc', methods=["POST"])
 def train_vanna_doc():
     try:
@@ -227,10 +311,10 @@ def train_vanna_doc():
         vn = MyVanna()
 
         files = request.files.getlist('files[]')
+        
         #  If no valid doc uploaded, call fallback
         if not files or all(f.filename.strip() == '' for f in files):
-            db_id = vn.train_with_fallback_doc()
-            return jsonify({"id": db_id, "status": "trained with generated metadata"}), 202
+            return jsonify({"error": "No files"})
 
         for file in files:
             if file.filename == '':
@@ -241,15 +325,25 @@ def train_vanna_doc():
             file.save(file_path)
 
             data = parse_file_data_only(file_path)
+
+            # Split document into chunks
+            ids = []
+            for i, chunk in enumerate(vn.split_document_into_chunks(data["data"], max_chunk_size=500)):
+                res = vn.train(documentation=chunk)
+                
+                ids.append(res)
+            vn.add_document(db_id=res, doc_id=f"{data['file_name']}")
+            current_app.logger.info(f"✅ Added document chunks {len(ids)} chunks for {data['file_name']}")
         
-            res = vn.train(documentation=data["data"])
-            vn.add_document(db_id=res, doc_id=data["file_name"])
-            current_app.logger.info(f"✅ Added documentation to vanna chroma:\n{res}\n")
+            # res = vn.train(documentation=data["data"])
+            # vn.add_document(db_id=res, doc_id=data["file_name"])
+            # current_app.logger.info(f"✅ Added documentation to vanna chroma:\n{res}\n")
 
         return jsonify({"ids": [res]}), 202
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
+    
     
 @main.route('/vanna/train/ddl', methods=["POST"])
 def train_vanna_ddl():
@@ -509,6 +603,8 @@ def query_vanna(data=None):
         if data is None:
             raise ValueError("Missing data in the request body")
         vn = MyVanna()
+
+        # Connect to the database
         try:
             vn.connect_to_postgres(
                 host= os.getenv("DB_HOST"),
@@ -521,7 +617,28 @@ def query_vanna(data=None):
             current_app.logger.error(f"Vanna connection failed")
             result_reason = f"Connect to database to run query"
         
+        # Get driving table if exists
         vanna_query = data['query']
+        if os.getenv("DRIVING_TABLE"):
+            try:
+                driving_table = vn.ddl_collection.get(
+                    where_document=
+                    {
+                        "$or": [
+                            {"$contains": "create table " + str(os.getenv("DRIVING_TABLE")).lower()},
+                            {"$contains": "create table " + str(os.getenv("DRIVING_TABLE")).upper()},
+                            {"$contains": "CREATE TABLE " + str(os.getenv("DRIVING_TABLE")).lower()},
+                            {"$contains": "CREATE TABLE " + str(os.getenv("DRIVING_TABLE")).upper()},
+                        ]
+                    },
+                    limit=3
+                )["documents"]
+                current_app.logger.info(f"Driving table found: {driving_table}")
+                vanna_query += "\n" + str(driving_table) + "\n"
+            except Exception as e:
+                current_app.logger.error(f"Error occurred while fetching driving table: {str(e)}")
+
+        # Run the Vanna query
         current_app.logger.info(f"Vanna query: {vanna_query}")
         sql, df, fig = vn.ask(
                 question=vanna_query,
@@ -531,9 +648,10 @@ def query_vanna(data=None):
                 allow_llm_to_see_data=True
             )
         
+        # Iterate until a valid DataFrame is returned or max attempts reached
         counter = 0
         while (type(df) == Exception or type(df) == vanna.exceptions.ValidationError) and counter < 2:
-            current_app.logger.info("Vanna.AI run_sql error occurred:", df)
+            current_app.logger.info("Vanna.AI run_sql error occurred: " + str(df))
             current_app.logger.info(f"Vanna.AI run_sql query attempt {counter + 1}:")
             # ✅ Ask Vanna.AI a question
             sql, df, fig = vn.ask(
@@ -550,17 +668,21 @@ def query_vanna(data=None):
         
         current_app.logger.info(f"SQL Query: {sql}")
 
+        # Handle the result
         if type(df) == Exception or type(df) == vanna.exceptions.ValidationError: # error
             df_result = None
             result_reason = f"SQL error: {df}"
-        elif df is None: # no data result
-            current_app.logger.info("DataFrame is None, no data returned from Vanna.")
+        elif df is None or df.shape[0] == 0: # no data result
+            current_app.logger.info("DataFrame is None or empty, no data returned from Vanna.")
             df_result = None
         else: # success
             current_app.logger.info(type(df))
             current_app.logger.info(f"DataFrame shape: {df.shape}")
             df_result = df.head().to_json(orient='split')
             result_reason = None
+
+        if sql is None or sql == "":
+            sql = "No SQL query generated."
 
         return jsonify({"response": sql, "query_result": df_result, "result_reason": result_reason, "fig": fig.to_json() if fig is not None else None}), 200
     except Exception as e:
@@ -1046,6 +1168,7 @@ def graph_query():
         if formatted_sources:
             response_json["sources"] = formatted_sources
 
+
         # Add a summary for voice features - strip HTML tags if present
         try:
             rag = RAG(ChromaDB(), model_source="openai")
@@ -1074,6 +1197,7 @@ def graph_query():
 
         # Log that we're sending the response
         current_app.logger.info(f"📤 Sending response with {len(response_json['response'])} chars, {len(response_json.get('sources', []))} sources")
+
         return jsonify(response_json)
 
     except Exception as e:
@@ -1347,3 +1471,30 @@ def get_cluster_labels(graph_id):
     except Exception as e:
         current_app.logger.error(f"Error fetching labels: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
+
+@main.route("/setenv", methods=["POST"])
+def set_env(key=None, value=None):
+    try:
+        if not key or not value:
+            data = request.get_json()
+            key = data.get("key")
+            value = data.get("value")
+        os.environ[key] = value
+    except Exception as e:
+        current_app.logger.error(f"Error setting environment variable: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Failed to set environment variable: {str(e)}"}), 500
+    current_app.logger.info(f"Environment variable {key} set to {value}")
+    return jsonify({"message": f"Environment variable {key} set to {value}"}), 200
+
+@main.route("/setenv", methods=["DELETE"])
+def delete_env(key=None):
+    try:
+        if not key:    
+            data = request.get_json()
+            key = data.get("key")
+        del os.environ[key]
+    except Exception as e:
+        current_app.logger.error(f"Error deleting environment variable: {str(e)}", exc_info=True)
+        return jsonify({"error": f"Failed to delete environment variable: {str(e)}"}), 500
+    current_app.logger.info(f"Environment variable {key} deleted")
+    return jsonify({"message": f"Environment variable {key} deleted"}), 200

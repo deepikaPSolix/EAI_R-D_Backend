@@ -10,7 +10,7 @@ import re
 import json
 
 class LLMModel:
-    def __init__(self, model_source: str = "gpt_oss_120", json_mode: bool = False):
+    def __init__(self, model_source: str = "together", json_mode: bool = False):
         self.model_source = model_source
         self.json_mode = json_mode
         self.model = self._initialize_model()
@@ -162,4 +162,3 @@ class LLMModel:
         except Exception as e:
             current_app.logger.error(f"Error during model inference: {e}", exc_info=True)
             raise
-

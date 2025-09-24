@@ -35,6 +35,7 @@ litellm
 aiohttp>=3.9.3
 beautifulsoup4>=4.12.3
 asyncio
+nest-asyncio>=1.6.0
 networkx>=3.2.1
 pyvis>=0.3.0
 faiss-cpu>=1.7.4
@@ -54,6 +55,7 @@ vanna
 biomcp-python>=0.1.10
 uv>=0.1.32
 python-Levenshtein
+SQLAlchemy
 crewai
 crewai_tools
 nest-asyncio
