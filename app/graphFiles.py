@@ -99,7 +99,7 @@ class GraphFiles():
         # Use global/shared SentenceTransformer instance for performance
         # Lazy, per-process model init to avoid CUDA in forked children
         import torch
-        from sentence_transformers import SentenceTransformer
+        
 
         if not hasattr(self, "_st_model") or self._st_model is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -107,7 +107,7 @@ class GraphFiles():
             self._st_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
         self.st_model = self._st_model
 
-        self.llm = LLMModel.from_openai()
+        self.llm = LLMModel.from_together()
         self.all_chunks=None
         self.all_embeddings = None        
         self.session_id = str(uuid.uuid4())[:8]  # Generate a unique session ID        # Initialize ChromaDB client for graph chunks
@@ -1620,70 +1620,58 @@ class GraphFiles():
         current_app.logger.info("🔍 [STEP 5] Building LLM prompt with context")
         
         prompt = (
-    "ROLE: You are an expert document analyst. Use ONLY the provided context.\n\n"
-    f"CONTEXT (from {unique_sources} document sources):\n{context}\n\n"
+    "ROLE:\n"
+    "You are an expert document analyst. Use ONLY the provided CONTEXT. "
+    "If the query cannot be answered from CONTEXT, output exactly: [NO_ANSWER].\n\n"
+
+    f"CONTEXT (from {unique_sources} document sources):\n"
+    f"{context}\n\n"
+
     f"USER QUERY:\n{query}\n\n"
 
-    "OUTPUT CONTRACT (read carefully and follow EXACTLY):\n"
-    "1) Choose the simplest format that works:\n"
-    "   • PLAIN TEXT: Use for definitions, explanations, and single entities\n"
-    "   • HTML TABLES: Use for lists, comparisons, multiple items, or when data is structured\n"
-    "   • IMPORTANT: Use HTML tables when: comparing differences, showing grouped data, listing items with similar attributes, or any data with consistent properties across multiple entries\n"
-    "   • Focus on clarity - don't make tables more complex than needed\n"
-    "\n"
-    "2) Tables MUST be properly formatted HTML fragments:\n"
-    "   • DO NOT include <!DOCTYPE>, <html>, <head>, <body>, <style>, or markdown code fences (```).\n"
-    "   • For multiple tables, output them one after another and put a single line '<hr />' between tables.\n"
-    "   • ALWAYS use proper line breaks between HTML elements (<table>, <tr>, etc.) for readability\n"
-    "   • ALWAYS maintain proper indentation in HTML table structure for clear rendering\n"
-    "   • ALWAYS include spaces between HTML tags to prevent rendering issues\n"
-    "   • If you need section headings, use <p><strong>Heading</strong></p> just above the table.\n"
-    "\n"
-    "3) Table structure REQUIREMENTS (follow this EXACTLY):\n"
-    "   • Each table MUST use proper HTML: <table><thead><tr><th>...</th></tr></thead><tbody><tr><td>...</td></tr></tbody></table>\n"
-    "   • ALWAYS create separate <th> tags for EACH column header\n"
-    "   • ALWAYS create separate <td> tags for EACH cell value\n"
-    "   • ALWAYS include spaces between table elements to ensure proper rendering\n"
-    "   • Example for a 3-column table:\n"
-    "     <table>\n"
-    "       <thead>\n"
-    "         <tr><th>ID</th><th>Name</th><th>Value</th></tr>\n"
-    "       </thead>\n"
-    "       <tbody>\n"
-    "         <tr><td>1</td><td>Item A</td><td>$100</td></tr>\n"
-    "         <tr><td>2</td><td>Item B</td><td>$200</td></tr>\n"
-    "       </tbody>\n"
-    "     </table>\n"
-    "\n"
-    "4) Table optimization rules:\n"
-    "   • Include ONLY essential columns - focus on the most important data\n"
-    "   • Add the class 'numeric' to cells with numbers: <td class='numeric'>123.45</td>\n"
-    "   • NEVER use | characters as column separators - always use proper <td> tags\n"
-    "   • If data is extensive, summarize or group similar items instead of showing everything\n"
-    "\n"
-    "5) Keep responses minimal and efficient:\n"
-    "   • NO extra HTML tags or styling - just table fragments if tables are needed\n"
-    "   • Separate multiple tables with a simple '<hr />'\n"
-    "   • NO source citations - the system handles this automatically\n"
-    "\n"
-    "5) Source tracking (REQUIRED):\n"
-    "   • At the END of your response, include a HIDDEN section using this exact format: \n"
-    "     <div class=\"sources-used\" style=\"display:none\">[list of sources]</div>\n"
-    "   • For [list of sources], provide a comma-separated list of the document filenames you actually used\n"
-    "     to answer the query. Include ONLY sources you directly referenced in your answer.\n"
-    "   • If you used multiple sources, list them in order of importance to your answer.\n"
-    "   • Example: <div class=\"sources-used\" style=\"display:none\">PO_1070.pdf, Invoice_10021748.pdf</div>\n"
-    "\n"
-    "6) SELF-CHECK before sending the final answer:\n"
-    "   • The output MUST NOT contain <!DOCTYPE>, <html>, <head>, <body>, <style>, or ``` anywhere.\n"
-    "   • VERIFY all tables include proper spacing and line breaks between elements.\n"
-    "   • VERIFY that each column has its own <th> tag and each data point has its own <td> tag.\n"
-    "   • VERIFY that table structure follows the example format exactly, with proper indentation.\n"
-    "   • If tables are present, they must follow the fragment template above and be separated by '<hr />' if more than one.\n"
-    "   • ENSURE you've included the hidden sources section at the end as specified above.\n"
-    "   • DO NOT include any visible 'Sources:' or source citations in the visible part of your answer.\n"
-    "\n"
+    "OUTPUT CONTRACT (FOLLOW ALL):\n"
+    "A) Truth & Scope\n"
+    "- Never invent facts. If unsupported → [NO_ANSWER]. If partially supported, state only what is supported.\n\n"
 
+    "B) Substance & Length\n"
+    "- Default to 2–4 short paragraphs (~150–300 words total) when explanation is needed.\n"
+    "- After paragraphs, include a compact bullet list of 3–7 items for steps/fields/takeaways when relevant.\n\n"
+
+    "C) Layout & Spacing (HARD RULES)\n"
+    "- Paragraphs: each separated by exactly ONE blank line (i.e., a single '\\n\\n').\n"
+    "- Bullets: each bullet on its own line, prefixed by '• ' (U+2022 + space). No numbering unless present in CONTEXT.\n"
+    "- Bullet blocks: one blank line BEFORE the bullet block and one AFTER it.\n"
+    "- Sub-bullets (only if needed): prefix with '– ' and indent with a single space after the main bullet line.\n"
+    "- No trailing spaces; no double blank lines anywhere.\n"
+    "- If an HTML table is emitted, put ONE blank line before it and ONE blank line after it.\n\n"
+
+    "D) Table Decision (MANDATORY HEURISTICS)\n"
+    "- Emit an HTML table fragment when comparing ≥2 items, listing many similar items with shared fields, "
+    "showing metrics/specs/timelines/schedules, or when the user asks list/compare/overview/top N/differences/fields/schema.\n"
+    "- If a table is emitted, ALSO include a 1–2 sentence summary paragraph adjacent to it (above or below).\n\n"
+
+    "E) HTML TABLE RULES (apply ONLY when emitting a table)\n"
+    "- Output a fragment ONLY (no <!DOCTYPE>, <html>, <head>, <body>, <style>, or code fences).\n"
+    "- Structure EXACTLY:\n"
+    "  <table>\n"
+    "    <thead><tr><th>…</th></tr></thead>\n"
+    "    <tbody><tr><td>…</td></tr></tbody>\n"
+    "  </table>\n"
+    "- One <th> per column; one <td> per cell; keep columns ≤ 8 when possible.\n"
+    "- Mark numeric cells with class='numeric'.\n"
+    "- If >25 rows, show the most relevant 10–25 and say more exist.\n\n"
+
+    "F) Style\n"
+    "- Plain language. Keep jargon only if present in CONTEXT. Prefer concrete specifics over vague phrasing.\n\n"
+
+    "G) Final Self-Check BEFORE sending\n"
+    "- If unsupported → [NO_ANSWER].\n"
+    "- If a table is present, confirm the exact fragment structure and numeric class usage.\n"
+    "- Confirm paragraphs/bullets/table are separated with EXACT spacing rules above. No code fences; no visible citations.\n\n"
+
+    "H) Source Tracking (REQUIRED, hidden)\n"
+    '- Append EXACTLY at the very end:\n'
+    '  <div class=\"sources-used\" style=\"display:none\">[comma-separated filenames/URLs used, in importance order]</div>\n'
 )
 
         try:
