@@ -14,10 +14,10 @@ import logging
 openai_model = LLMModel.from_openai()
 
 # Create a CrewAI LLM instance that uses our OpenAI model via langchain_openai
-llm = LLM(model="gpt-5-nano", 
-          api_key=os.environ.get("OPENAI_API_KEY"),
-          base_url="https://api.openai.com/v1"
-          )
+llm = LLM(model="together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+          api_key=os.environ.get("TOGETHER_API_KEY"),
+          base_url="https://api.together.xyz/v1"
+        )
 label_generator = Agent(
     role="Label Generator",
     goal=(

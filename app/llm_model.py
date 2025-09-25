@@ -36,7 +36,7 @@ class LLMModel:
         elif self.model_source == "openai":
             return ChatOpenAI(
                 temperature=0.1, 
-                model="gpt-5-nano",
+                model="gpt-4o-mini",
                 openai_api_key=os.getenv("OPENAI_API_KEY"),
             )
         elif self.model_source == "qwen":
