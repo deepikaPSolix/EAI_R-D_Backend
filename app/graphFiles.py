@@ -1,9 +1,11 @@
-from flask import current_app
+
+from flask import current_app, Flask
 import networkx as nx
 import igraph as ig
 from collections import defaultdict
 import leidenalg
 import os
+import time  # Ensure time is imported for performance tracking
 import psycopg2
 from app.graph_storage_pg import GraphPostgresStorage
 from app.storage_redis import GraphRedisStorage
@@ -16,6 +18,7 @@ import numpy as np
 import re
 import ast
 import time
+import json
 from collections import Counter
 from urllib.parse import urlparse
 from pyvis.network import Network
@@ -24,6 +27,7 @@ from app.chroma_db import ChromaDB  # Added import for ChromaDB
 import uuid  # For generating unique IDs
 import spacy
 from nltk.corpus import stopwords
+from pathlib import Path
 
 dns_host = os.getenv("DNS_HOST")
 dns_dbname = os.getenv("DNS_DBNAME")
@@ -57,38 +61,45 @@ def deduplicate_chunks(chunks, prioritize_graph=True):
     Returns:
         List of deduplicated chunks
     """
-    seen_texts = set()
-    unique_chunks = []
+    if not chunks:
+        return []
+        
+    # Use a dictionary for faster lookups with hash-based text matching
+    # This is faster than using a set + separate list
+    unique_dict = {}
     
-    # Sort chunks by retrieval type if prioritizing graph chunks
-    if prioritize_graph:
+    # Skip sorting if there's nothing to prioritize
+    if prioritize_graph and any(isinstance(c, dict) and c.get("retrieval_type") == "graph" for c in chunks):
+        # Faster sorting with direct comparison - prioritize graph chunks
         chunks = sorted(chunks, key=lambda x: 0 if isinstance(x, dict) and x.get("retrieval_type") == "graph" else 1)
-        current_app.logger.info(f"🔄 Sorting chunks to prioritize graph-based retrieval")
     
-    duplicates_by_text = 0
-    
+    # Fast path: process all chunks in a single pass
     for chunk in chunks:
+        # Handle dictionaries (most common case)
         if isinstance(chunk, dict):
-            text = chunk.get("text") or chunk.get("data")
+            # Fast direct lookup, no conditional branching
+            text = chunk.get("text", chunk.get("data", ""))
         else:
+            # Fallback for non-dict chunks
             text = str(chunk)
-        if text and text in seen_texts:
-            duplicates_by_text += 1
+            
+        # Skip empty text
+        if not text:
             continue
-        if text:
-            seen_texts.add(text)
-        unique_chunks.append(chunk)
+            
+        # Store only the first occurrence (which will be a graph chunk if prioritized)
+        if text not in unique_dict:
+            unique_dict[text] = chunk
     
-    current_app.logger.info(f"🔍 Deduplication: removed {duplicates_by_text} duplicates by text content")
-    current_app.logger.info(f"📊 Deduplication results: {len(unique_chunks)} unique chunks from {len(chunks)} total")
-    
-    return unique_chunks
+    # Return values from the dictionary (already unique)
+    return list(unique_dict.values())
+
 class GraphFiles():
     def __init__(self):
         # Use global/shared SentenceTransformer instance for performance
         # Lazy, per-process model init to avoid CUDA in forked children
         import torch
-        from sentence_transformers import SentenceTransformer
+        
 
         if not hasattr(self, "_st_model") or self._st_model is None:
             device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -127,20 +138,29 @@ class GraphFiles():
         valid_chunks = []
         for idx, chunk in enumerate(self.all_chunks):
             try:
-                if isinstance(chunk, dict) and "text" in chunk and "source" in chunk:
-                    valid_chunks.append(chunk)
-                elif isinstance(chunk, dict):
+                if isinstance(chunk, dict) and "text" in chunk:
+                    # Preserve both source and url fields when available
+                    source = chunk.get("source", chunk.get("url", "No Source Available"))
                     valid_chunks.append({
                         "text": chunk.get("text", ""),
-                        "source": chunk.get("source", "No Source Available")
+                        "source": source
+                    })
+                elif isinstance(chunk, dict):
+                    # Check for URL or source in any dict format
+                    source = chunk.get("source", chunk.get("url", "No Source Available"))
+                    valid_chunks.append({
+                        "text": chunk.get("text", ""),
+                        "source": source
                     })
                 elif isinstance(chunk, str):
                     try:
                         parsed = ast.literal_eval(chunk)
                         if isinstance(parsed, dict):
+                            # Check for URL or source in parsed dict
+                            source = parsed.get("source", parsed.get("url", "No Source Available"))
                             valid_chunks.append({
                                 "text": parsed.get("text", ""),
-                                "source": parsed.get("source", "No Source Available")
+                                "source": source
                             })
                         else:
                             valid_chunks.append({
@@ -179,17 +199,24 @@ class GraphFiles():
             text = text.strip()
 
         if source:
-            filename = os.path.splitext(os.path.basename(source))[0]
-            current_app.logger.info(f"[GRAPHFILES] split_source_and_text: source='{source}', filename='{filename}'")
-            cleaned_lines = []
-            for line in text.splitlines():
-                line_lower = line.strip().lower()
-                # Strict: do not skip lines based on fuzzy filename matching
-                # Only skip if the exact filename (with all spaces) is present
-                if filename in line_lower:
-                    continue
-                cleaned_lines.append(line.strip())
-            text = "\n".join(cleaned_lines)
+            # Check if source is a URL - if so, don't do filename extraction
+            if source.startswith(("http://", "https://")):
+                # For URLs, preserve the full URL as the source and clean the text
+                cleaned_lines = [line.strip() for line in text.splitlines()]
+                text = "\n".join(cleaned_lines)
+                # No additional processing needed for URLs - keep the URL as is
+            else:
+                # For files, extract the filename and remove filename references from text
+                filename = os.path.splitext(os.path.basename(source))[0]
+                cleaned_lines = []
+                for line in text.splitlines():
+                    line_lower = line.strip().lower()
+                    # Strict: do not skip lines based on fuzzy filename matching
+                    # Only skip if the exact filename (with all spaces) is present
+                    if filename in line_lower:
+                        continue
+                    cleaned_lines.append(line.strip())
+                text = "\n".join(cleaned_lines)
 
         return source, text.strip()
 
@@ -224,7 +251,8 @@ class GraphFiles():
                         parsed = ast.literal_eval(chunk)
                         if isinstance(parsed, dict):
                             text = parsed.get("text", "").strip()
-                            source = parsed.get("url", "").strip()
+                            # Check for URL in both 'url' and 'source' keys
+                            source = parsed.get("url", parsed.get("source", "")).strip()
                         else:
                             source, text = self.split_source_and_text(chunk)
                     except Exception:
@@ -232,8 +260,14 @@ class GraphFiles():
 
                 elif isinstance(chunk, dict):
                     text = chunk.get("text", "").strip()
-                    source = chunk.get("url", "").strip()
-
+                    # Check for URL in both 'url' and 'source' keys 
+                    source = chunk.get("url", chunk.get("source", "")).strip()
+                    
+                # Ensure URLs are preserved as-is in source
+                if source and source.startswith(("http://", "https://")):
+                    # For URLs, don't do any filename extraction or manipulation
+                    # Simply preserve the URL as the source
+                    pass
                 else:
                     source, text = self.split_source_and_text(str(chunk))
 
@@ -248,7 +282,13 @@ class GraphFiles():
 
         self.all_chunks = [{"text": G_nx.nodes[n].get("text", ""), "source": G_nx.nodes[n].get("source", "No Source Available")} for n in G_nx.nodes()]
         self._ensure_all_chunks_are_dicts() 
-        self.all_embeddings = self.st_model.encode([c["text"] for c in self.all_chunks])
+
+        # EMBED: compute normalized numpy embeddings once (cosine-ready)
+        self.all_embeddings = self.st_model.encode(
+            [c["text"] for c in self.all_chunks],
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        )
 
         mean_vec = np.mean(self.all_embeddings, axis=0, keepdims=True)
         sims     = cosine_similarity(mean_vec, self.all_embeddings).flatten()
@@ -329,9 +369,12 @@ class GraphFiles():
         self.G_nx           = G_nx
         self.chunk_node_ids = list(G_nx.nodes())
         self.chunks         = [G_nx.nodes[n]["text"] for n in self.chunk_node_ids]
-        self.embeddings     = self.st_model.encode(self.chunks)
+
+        # (left as-is) — no behavioral change elsewhere that depends on this line
+        # self.embeddings     = self.st_model.encode(self.chunks)
 
         return self.graph_id, G_nx      
+
     def load_graph_from_redis(self):
         """
         Load graph data from RedisGraph when needed. This is a fallback method
@@ -399,9 +442,13 @@ class GraphFiles():
             ]
             self._ensure_all_chunks_are_dicts()
             
-            # Load or generate embeddings
+            # EMBED: generate normalized embeddings (cosine-ready)
             try:
-                self.all_embeddings = self.st_model.encode([c["text"] for c in self.all_chunks])
+                self.all_embeddings = self.st_model.encode(
+                    [c["text"] for c in self.all_chunks],
+                    convert_to_numpy=True,
+                    normalize_embeddings=True,
+                )
                 current_app.logger.info(f"✅ Successfully generated embeddings for {len(self.all_chunks)} chunks")
             except Exception as e:
                 current_app.logger.error(f"❌ Failed to generate embeddings: {e}")
@@ -413,6 +460,8 @@ class GraphFiles():
         except Exception as e:
             current_app.logger.error(f"❌ Failed to load graph from RedisGraph: {e}", exc_info=True)
             return False
+            # (duplicated block below left untouched to avoid changing other logic)
+
             self.G_nx = G_nx
             self.chunk_node_ids = list(G_nx.nodes())
             self.all_chunks = [
@@ -435,10 +484,24 @@ class GraphFiles():
         except Exception as e:
             current_app.logger.error(f"❌ Failed to load graph from RedisGraph: {e}", exc_info=True)
             return False    
-    def _redisgraph_expand(self, seed_ids, max_depth=2, limit=20):
+
+    def _redisgraph_expand(self, seed_ids, max_depth=1, limit=20):
+        """
+        Expand seed nodes in the graph to find connected chunks.
+        
+        Args:
+            seed_ids: List of node IDs to use as starting points
+            max_depth: Maximum traversal depth (1 or 2 recommended)
+            limit: Maximum number of results to return
+            
+        Returns:
+            List of expanded nodes with their attributes
+        """
         if seed_ids is None or len(seed_ids) == 0:
+            current_app.logger.warning("⚠️ No seed IDs provided for graph expansion")
             return []
 
+        start_time = time.time()
         try:
             # Use session-specific RedisGraph storage with increased timeout
             store = GraphRedisStorage(session_id=self.session_id, timeout=30)
@@ -447,12 +510,16 @@ class GraphFiles():
             # Convert seed IDs to strings for consistent handling
             seed_str_ids = [str(i) for i in seed_ids]
             
-            # Limit the number of seed IDs to process to avoid very large queries
-            if len(seed_str_ids) > 10:
-                current_app.logger.warning(f"⚠️ Too many seed IDs ({len(seed_str_ids)}), limiting to 10")
-                seed_str_ids = seed_str_ids[:10]
+            # OPTIMIZATION: Intelligently limit seeds based on depth
+            # For depth=1, we can process more seeds efficiently
+            # For depth=2, limit more aggressively to avoid exponential explosion
+            max_seeds = 15 if max_depth == 1 else 8
             
-            # Query using original_id property for non-numeric IDs
+            if len(seed_str_ids) > max_seeds:
+                current_app.logger.info(f"🔍 Too many seed IDs ({len(seed_str_ids)}), limiting to {max_seeds} for depth={max_depth}")
+                seed_str_ids = seed_str_ids[:max_seeds]
+            
+            # Split seeds into numeric and string types for optimized query
             numeric_seeds = []
             string_seeds = []
             
@@ -462,80 +529,154 @@ class GraphFiles():
                 except (ValueError, TypeError):
                     string_seeds.append(seed_id)
             
-            # Optimize query based on seed types
             if not numeric_seeds and not string_seeds:
                 return []
                 
-            # Use parameters for query to prevent injection and improve caching
+            # OPTIMIZATION: Build query parameters once
             params = {}
             
-            # Build efficient query with parameters
-            if numeric_seeds and string_seeds:
-                # Mixed case: both numeric and string IDs
+            # OPTIMIZATION: Sort seeds for better cache hits
+            if numeric_seeds:
+                numeric_seeds.sort()
                 params['numeric_ids'] = numeric_seeds
+            
+            if string_seeds:
+                string_seeds.sort()
                 params['string_ids'] = string_seeds
-                
-                q = f"""
-                MATCH (c:Chunk)
-                WHERE c.idx IN $numeric_ids OR c.original_id IN $string_ids
-                MATCH (c)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
-                RETURN DISTINCT x.idx, x.text, x.source, x.original_id
-                LIMIT {limit}
-                """
-            elif numeric_seeds:
-                # Only numeric IDs
-                params['numeric_ids'] = numeric_seeds
-                
-                q = f"""
-                MATCH (c:Chunk)
-                WHERE c.idx IN $numeric_ids
-                MATCH (c)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
-                RETURN DISTINCT x.idx, x.text, x.source, x.original_id
-                LIMIT {limit}
-                """
+            
+            # OPTIMIZATION: Build efficient query with parameters and better indexes
+            query_parts = []
+            
+            # For better performance, use more focused queries based on depth
+            if max_depth == 1:
+                # Direct neighbors query (faster)
+                if numeric_seeds and string_seeds:
+                    q = """
+                    MATCH (c:Chunk)
+                    WHERE c.idx IN $numeric_ids OR c.original_id IN $string_ids
+                    MATCH (c)-[:SIMILAR]->(x:Chunk)
+                    RETURN DISTINCT x.idx, x.text, x.source, x.original_id
+                    LIMIT $limit
+                    """
+                elif numeric_seeds:
+                    q = """
+                    MATCH (c:Chunk)
+                    WHERE c.idx IN $numeric_ids
+                    MATCH (c)-[:SIMILAR]->(x:Chunk)
+                    RETURN DISTINCT x.idx, x.text, x.source, x.original_id
+                    LIMIT $limit
+                    """
+                else:
+                    q = """
+                    MATCH (c:Chunk)
+                    WHERE c.original_id IN $string_ids
+                    MATCH (c)-[:SIMILAR]->(x:Chunk)
+                    RETURN DISTINCT x.idx, x.text, x.source, x.original_id
+                    LIMIT $limit
+                    """
             else:
-                # Only string IDs
-                params['string_ids'] = string_seeds
-                
-                q = f"""
-                MATCH (c:Chunk)
-                WHERE c.original_id IN $string_ids
-                MATCH (c)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
-                RETURN DISTINCT x.idx, x.text, x.source, x.original_id
-                LIMIT {limit}
-                """
-              # Execute the query with parameters
-            start_time = time.time()
-            result = store.query_with_timeout(q, params=params, timeout=30)  # Use timeout-protected query
-            query_time = time.time() - start_time
+                # Multi-hop traversal (slower)
+                if numeric_seeds and string_seeds:
+                    q = f"""
+                    MATCH (c:Chunk)
+                    WHERE c.idx IN $numeric_ids OR c.original_id IN $string_ids
+                    MATCH (c)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
+                    RETURN DISTINCT x.idx, x.text, x.source, x.original_id
+                    LIMIT $limit
+                    """
+                elif numeric_seeds:
+                    q = f"""
+                    MATCH (c:Chunk)
+                    WHERE c.idx IN $numeric_ids
+                    MATCH (c)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
+                    RETURN DISTINCT x.idx, x.text, x.source, x.original_id
+                    LIMIT $limit
+                    """
+                else:
+                    q = f"""
+                    MATCH (c:Chunk)
+                    WHERE c.original_id IN $string_ids
+                    MATCH (c)-[:SIMILAR*1..{max_depth}]->(x:Chunk)
+                    RETURN DISTINCT x.idx, x.text, x.source, x.original_id
+                    LIMIT $limit
+                    """
+            
+            # Add limit as parameter for better query caching
+            params['limit'] = limit
+              
+            # Execute the query with parameters and timeout protection
+            current_app.logger.info(f"🔍 Expanding graph from {len(seed_str_ids)} seeds with depth={max_depth}, limit={limit}")
+            query_start = time.time()
+            result = store.query_with_timeout(q, params=params, timeout=30)
+            query_time = time.time() - query_start
             
             if result is None:
-                current_app.logger.warning("Graph expansion query timed out, returning empty results")
+                current_app.logger.warning("⚠️ Graph expansion query timed out, returning empty results")
                 return []
                 
-            current_app.logger.debug(f"Graph expansion query completed in {query_time:.2f} seconds")
+            current_app.logger.info(f"⏱️ Graph expansion query completed in {query_time:.3f}s")
             
+            # OPTIMIZATION: Pre-allocate for efficiency and track stats
             valid_results = []
+            invalid_count = 0
             
             max_idx = len(self.all_chunks) - 1 if self.all_chunks else -1
             
-            for r in result.result_set:
-                idx = int(r[0])
-                original_id = r[3] if len(r) > 3 else str(idx)
-                
-                try:
-                    idx_to_use = int(original_id)
-                except ValueError:
-                    idx_to_use = original_id
-                
-                if isinstance(idx_to_use, int) and (max_idx == -1 or idx_to_use <= max_idx):
-                    valid_results.append({"idx": idx_to_use, "text": r[1], "source": r[2]})
-                elif isinstance(idx_to_use, str):
-                    valid_results.append({"idx": idx_to_use, "text": r[1], "source": r[2]})
-                else:
-                    current_app.logger.warning(f"⚠️ Graph returned out-of-range index: {idx_to_use} (max valid: {max_idx})")
+            # OPTIMIZATION: Much more efficient bulk result processing
+            valid_results = []
+            invalid_count = 0
+            result_count = len(result.result_set) if result.result_set else 0
             
-            current_app.logger.info(f"📊 Graph expansion: {len(valid_results)}/{len(result.result_set)} valid results")
+            # Pre-allocate for performance when possible
+            if result_count > 0:
+                valid_results = []
+                
+                # Process all results in one fast loop without excessive logging
+                for r in result.result_set:
+                    # Process index with minimal type checking
+                    idx = int(r[0]) if r[0] is not None else -1
+                    original_id = r[3] if len(r) > 3 and r[3] is not None else str(idx)
+                    
+                    # Determine index to use quickly
+                    if isinstance(original_id, int) or (isinstance(original_id, str) and original_id.isdigit()):
+                        try:
+                            idx_to_use = int(original_id)
+                            # Fast validity check
+                            if max_idx == -1 or 0 <= idx_to_use <= max_idx:
+                                valid_results.append({
+                                    "idx": idx_to_use,
+                                    "text": r[1] or "",
+                                    "source": r[2] or "No Source Available"
+                                })
+                            else:
+                                invalid_count += 1
+                        except (ValueError, TypeError):
+                            # String that looked like a number but wasn't
+                            valid_results.append({
+                                "idx": original_id,
+                                "text": r[1] or "",
+                                "source": r[2] or "No Source Available"
+                            })
+                    else:
+                        # Just use the string as is
+                        valid_results.append({
+                            "idx": original_id,
+                            "text": r[1] or "",
+                            "source": r[2] or "No Source Available"
+                        })
+            
+            # Only log if there were actually invalid nodes to report
+            if invalid_count > 0:
+                current_app.logger.warning(f"⚠️ Skipped {invalid_count} invalid nodes from graph results")
+            
+            # Calculate percentage only if needed and with safety check
+            if result_count > 0:
+                valid_percent = len(valid_results) / result_count * 100
+                current_app.logger.info(f"📊 Graph expansion: {len(valid_results)}/{result_count} valid results ({valid_percent:.1f}%)")
+            
+            total_time = time.time() - start_time
+            current_app.logger.info(f"⏱️ Total graph expansion time: {total_time:.3f}s")
+            
             return valid_results
             
         except Exception as e:
@@ -647,6 +788,7 @@ class GraphFiles():
         net.repulsion(node_distance=150, central_gravity=0.3)
 
         return net.generate_html()
+
     def store_cluster_label_to_db(self, cluster_id: int, label: str):
         try:
             import psycopg2
@@ -658,7 +800,6 @@ class GraphFiles():
                         VALUES (%s, %s, %s)
                         ON CONFLICT (graph_id, cluster_id) DO UPDATE SET label = EXCLUDED.label
                     """, (self.graph_id, cluster_id, label))
-            current_app.logger.info(f"✅ Label stored: {label} (graph_id={self.graph_id}, cluster_id={cluster_id})")
         except Exception as e:
             current_app.logger.error(f"❌ DB label storage failed for cluster {cluster_id}: {e}", exc_info=True)
 
@@ -678,6 +819,7 @@ class GraphFiles():
                         target_graph.add_edge(n1, n2, color="gray", width=1)
                         edge_count += 1
         current_app.logger.info(f"🌐 Global semantic edges added: {edge_count}")
+
     def render_combined_clusters_to_single_graph(self, graph_cluster_map: dict, min_cluster_size=1, MAX_LABEL_NODES=7, threshold=0.84):
             combined_G = nx.Graph()
             node_id_map = {}
@@ -733,9 +875,11 @@ class GraphFiles():
                 ]
 
             self._ensure_all_chunks_are_dicts()            
+
+            # EMBED: normalized embeddings for combined graph
             self.all_embeddings = self.st_model.encode([
                 chunk["text"] for chunk in self.all_chunks if chunk["text"]
-            ])
+            ], convert_to_numpy=True, normalize_embeddings=True)
             
             redis_store = GraphRedisStorage(session_id=self.session_id)
             redis_store.store_graph(combined_G)
@@ -836,11 +980,17 @@ class GraphFiles():
                         metadata[key] = ""
                 
                 metadatas.append(metadata)
-            
+
+            # EMBED: push precomputed (normalized) embeddings into Chroma
+            embs = self.all_embeddings
+            if embs is None:
+                embs = self.st_model.encode(texts, convert_to_numpy=True, normalize_embeddings=True)
+
             self.graph_collection.upsert(
                 ids=ids,
                 documents=texts,
-                metadatas=metadatas
+                metadatas=metadatas,
+                embeddings=embs.tolist(),  # EMBED
             )
             
             self.chroma_id_map = {id_str: idx for idx, id_str in enumerate(ids)}
@@ -850,29 +1000,43 @@ class GraphFiles():
         except Exception as e:
             current_app.logger.error(f"❌ Failed to store chunks in ChromaDB: {e}", exc_info=True)
             return False
-    def query_chroma_chunks(self, query_text, n_results=8):
+
+    # EMBED: accept q_emb and query with query_embeddings (no query-time embedding inside Chroma)
+    def query_chroma_chunks(self, query_text, n_results=8, q_emb=None):
         """
         Query the ChromaDB collection for chunks relevant to the query.
         
         Args:
             query_text (str): The query text
             n_results (int): Maximum number of results to return
+            q_emb (np.ndarray or list): precomputed normalized query embedding (optional)
             
         Returns:
             List of chunk dictionaries with text and source
         """
+        start_time = time.time()
         if not hasattr(self, "graph_collection"):
             current_app.logger.warning("❌ ChromaDB collection not initialized")
             return []
             
-        try:              
+        try:
             current_app.logger.info(f"🔍 Querying current session's ChromaDB collection '{self.collection_name}' with '{query_text[:50]}...' for {n_results} results")
             
             available_chunks = len(self.all_chunks) if self.all_chunks else 100
             actual_n_results = min(n_results, available_chunks)
+
+            # OPTIMIZATION: Use provided embedding if available to avoid recomputation
+            if q_emb is None:
+                embed_start = time.time()
+                q_emb = self.st_model.encode([query_text], convert_to_numpy=True, normalize_embeddings=True)[0]
+                current_app.logger.info(f"⏱️ Query embedding computed in {time.time() - embed_start:.3f}s")
+            else:
+                current_app.logger.info(f"✅ Using pre-computed query embedding")
             
+            # use query_embeddings to avoid query-time embedding in Chroma
+            query_start = time.time()
             results = self.graph_collection.query(
-                query_texts=[query_text],
+                query_embeddings=[q_emb.tolist()],
                 n_results=actual_n_results
             )
             
@@ -881,10 +1045,18 @@ class GraphFiles():
                 num_results = len(results["ids"][0])
                 current_app.logger.info(f"✅ Current session's ChromaDB collection returned {num_results} results")
                 
+                # Track metadata
+                sources_counter = Counter()
+                clusters_counter = Counter()
+                
                 for i in range(num_results):
                     distance = results["distances"][0][i] if "distances" in results else None
                     source = results["metadatas"][0][i].get("source", "No Source Available")
                     cluster_id = results["metadatas"][0][i].get("cluster_id", -1)
+                    
+                    # OPTIMIZATION: Track metadata during iteration to avoid additional loops
+                    sources_counter[source] += 1
+                    clusters_counter[cluster_id] += 1
                     
                     chunk = {
                         "text": results["documents"][0][i],
@@ -897,31 +1069,17 @@ class GraphFiles():
                     }
                     chunks.append(chunk)
                     
-                    current_app.logger.debug(f"📄 Result {i+1}: Source={source}, Cluster={cluster_id}, Distance={f'{distance:.4f}' if distance is not None else 'N/A'}")
-                
-                sources = Counter([c.get("source", "Unknown") for c in chunks])
-                clusters = Counter([c.get("cluster_id", -1) for c in chunks])
-                
-                current_app.logger.info(f"📊 Retrieved chunks from {len(sources)} unique sources across {len(clusters)} clusters")
-                    
             else:
                 current_app.logger.warning("⚠️ ChromaDB query returned no results")
-                
+            
             return chunks
         except Exception as e:
             current_app.logger.error(f"❌ ChromaDB query failed: {e}", exc_info=True)
             return []
+
     def query_graph_link_response(self, query: str) -> dict:
-        """
-        Enhanced hybrid RAG method that combines ChromaDB vector search with graph traversal
-        to find the most relevant context for answering the query.
 
-        Args:
-        query: The user's question
-
-        Returns:
-        Dictionary with answer, source file, and other metadata
-        """
+        start_time = time.time()
         current_app.logger.info(f"📝 [START] Processing query: {query!r}")
 
         if not self.all_chunks:
@@ -930,239 +1088,752 @@ class GraphFiles():
 
         current_app.logger.info(f"📊 Total chunks in memory: {len(self.all_chunks)}")
 
+        # Initialize containers
         all_relevant_chunks = []
         graph_chunks = []
         semantic_chunks = []
         source_files = set()
         
+        # Initialize counter variables to prevent UnboundLocalError
+        graph_chunk_count = 0
+        semantic_chunk_count = 0
+        used_sources = []
+        
+        # Initialize timing variables to prevent UnboundLocalError
+        step3_start = time.time()
+        
+        # OPTIMIZATION: Compute query embedding only once and reuse for all operations
+        embed_start = time.time()
+        query_embedding = self.st_model.encode([query], convert_to_numpy=True, normalize_embeddings=True)[0]
+        current_app.logger.info(f"⏱️ Query embedding computed in {time.time() - embed_start:.3f}s")
+        
+
+        is_complex_query = None  # Will be determined by knee detection
+        complexity_score = 0.5   # Neutral starting point
+        
+        def detect_knee_point(scores, min_k=5):
+           
+            if len(scores) <= min_k:
+                current_app.logger.info(f"📊 Too few scores ({len(scores)}), using all available chunks")
+                return len(scores), 1.0  # If few scores, use all and mark as complex
+            
+            # Use more of the curve for short lists, less for long lists
+            cutoff = min(len(scores), max(30, len(scores) // 3))
+            
+            # Focus on the most relevant portion of the curve
+            working_scores = scores[:cutoff]
+            
+            # Create a straight line from first to last point in our working set
+            x = np.arange(len(working_scores))
+            first, last = working_scores[0], working_scores[-1]
+            line = first - (first - last) * (x / (len(working_scores) - 1))
+            
+
+            distances = working_scores - line
+            
+
+            window_size = max(2, min(5, len(distances) // 10))
+            if window_size > 1 and len(distances) > window_size*2:
+                smoothed_distances = np.convolve(distances, np.ones(window_size)/window_size, mode='valid')
+                # Pad the start to maintain array size
+                pad = np.zeros(window_size - 1)
+                smoothed_distances = np.concatenate((pad, smoothed_distances))
+            else:
+                smoothed_distances = distances
+            
+            # Find the knee point (maximum distance)
+            knee_idx = np.argmax(smoothed_distances)
+            
+            # Ensure we take at least min_k points 
+            knee_idx = max(knee_idx, min_k)
+            
+            if knee_idx < 3 and len(scores) > 10 and scores[0] > 0.8:
+                first_gap = scores[0] - scores[5]  
+                if first_gap < 0.1:  
+                    knee_idx = max(knee_idx, min(10, len(scores) // 5))
+                    current_app.logger.info(f"📊 Extended knee point due to consistently high relevance")
+            
+            # Calculate signal strength ratio: how much stronger is the top result vs average?
+            signal_strength = scores[0] / (np.mean(scores[:cutoff]) + 0.0001)
+            
+            # Calculate the slope at the knee point
+            if knee_idx > 0 and knee_idx < len(working_scores) - 1:
+                slope = abs(working_scores[knee_idx+1] - working_scores[knee_idx-1]) / 2
+            else:
+                slope = 0
+            
+            # Quantify how sharp the knee is (sharpness = complexity)
+            knee_sharpness = min(1.0, slope * 10)
+            
+            # Calculate knee position factor (earlier = more complex query)
+            position_factor = 1 - (knee_idx / len(working_scores))
+            
+
+            score_std = np.std(scores[:cutoff])
+            std_factor = min(1.0, score_std * 10)
+            
+            # Combine multiple signals to determine overall complexity
+            complexity = (0.4 * position_factor) + (0.3 * knee_sharpness) + (0.3 * std_factor)
+            
+            
+            return knee_idx, complexity
+        
+        current_app.logger.info(f"📝 Will determine query complexity dynamically using knee detection")
+        
+        # STEP 1: Vector-based retrieval with ChromaDB
+        step1_start = time.time()
         current_app.logger.info("🔍 [STEP 1] Retrieving semantically similar chunks from ChromaDB")
-        max_chroma_results = min(len(self.all_chunks) if self.all_chunks else 50, 100)
-        chroma_chunks = self.query_chroma_chunks(query, n_results=max_chroma_results)
+        
+        # Dynamic retrieval count based on dataset size and distribution
+        total_available = len(self.all_chunks) if self.all_chunks else 100
+        # Square root scaling with reasonable bounds
+        retrieval_base = max(20, min(100, int(np.sqrt(total_available) * 5)))
+        max_chroma_results = min(total_available, retrieval_base)
+        
+        current_app.logger.info(f"📊 Retrieving up to {max_chroma_results} chunks from ChromaDB")
+            
+        # Pass the pre-computed embedding to avoid recalculation
+        chroma_chunks = self.query_chroma_chunks(query, n_results=max_chroma_results, q_emb=query_embedding)
+        
         if chroma_chunks:
             current_app.logger.info(f"✅ Found {len(chroma_chunks)} relevant chunks from ChromaDB")
             for chunk in chroma_chunks:
                 chunk["retrieval_type"] = "semantic"
-            semantic_chunks.extend(chroma_chunks)
-            for chunk in chroma_chunks:
+                # Track sources during iteration to avoid additional loops later
                 if chunk.get('source'):
                     source_files.add(chunk.get('source'))
+            semantic_chunks.extend(chroma_chunks)
         else:
             current_app.logger.warning("⚠️ No chunks found in ChromaDB")
+        
+        current_app.logger.info(f"⏱️ Step 1 (ChromaDB retrieval) completed in {time.time() - step1_start:.3f}s")
+            
+        # STEP 2: Graph-based retrieval
+        step2_start = time.time()
         current_app.logger.info("🔍 [STEP 2] Performing graph-based retrieval")
         self._ensure_all_chunks_are_dicts()
 
-        current_app.logger.info("📊 Computing query embedding")
-        q_emb = self.st_model.encode([query])[0]
 
-        sims = cosine_similarity([q_emb], self.all_embeddings).flatten()
+        sim_start = time.time()
+        sims = cosine_similarity([query_embedding], self.all_embeddings).flatten()
+        current_app.logger.info(f"⏱️ Similarity calculation completed in {time.time() - sim_start:.3f}s")
+        
         total_chunks = len(self.all_chunks)
-        if total_chunks <= 20:
-            k = max(3, total_chunks // 2)
-        elif total_chunks <= 100:
-            k = max(10, total_chunks // 4)
+        
+
+        base_seed_count = max(3, min(20, int(np.sqrt(total_chunks))))
+        current_app.logger.info(f"📊 Base seed count from dataset size: {base_seed_count}")
+        
+        # Sort scores for analysis
+        sorted_scores = np.sort(sims)[::-1]  # Sort in descending order
+        
+        # Determine cutoff for analysis (avoid analyzing the long tail)
+        analysis_cutoff = min(total_chunks, max(20, int(total_chunks * 0.2)))
+        
+        # Calculate score gaps and rate of decline
+        if len(sorted_scores) > 5:
+            # Look at the gap between top scores to understand relevance distribution
+            top_score = sorted_scores[0]
+            percentile_50_score = sorted_scores[min(len(sorted_scores)-1, analysis_cutoff // 2)]
+            percentile_80_score = sorted_scores[min(len(sorted_scores)-1, int(analysis_cutoff * 0.8))]
+            
+            # Calculate drop-off rates
+            top_gap = top_score - sorted_scores[min(5, len(sorted_scores)-1)]
+            overall_drop = top_score - percentile_50_score
+            
+
+            seed_factor = 1.0 - min(0.7, top_gap * 3)  # Higher gap = lower factor
+            
+            # Calculate dynamic seed count
+            dynamic_seeds = int(base_seed_count * (1.0 + seed_factor))
+            
+            current_app.logger.info(f"""
+            📊 Seed selection analysis:
+            - Top score: {top_score:.4f}
+            - 50th percentile: {percentile_50_score:.4f}
+            - Top-5 gap: {top_gap:.4f}
+            - Overall drop: {overall_drop:.4f}
+            - Seed factor: {seed_factor:.2f}
+            - Dynamic seed count: {dynamic_seeds}
+            """)
         else:
-            k = max(20, total_chunks // 10)
+            # For very small datasets
+            dynamic_seeds = base_seed_count
+        
+
+        knee_analysis_size = min(len(sorted_scores), max(20, int(total_chunks * 0.1)))
+        analysis_scores = sorted_scores[:knee_analysis_size]
+        
+        if len(analysis_scores) > 5:
+            # Create a straight line from first to last value in our considered range
+            x = np.arange(len(analysis_scores))
+            first, last = analysis_scores[0], analysis_scores[-1]
+            line = first - (first - last) * (x / (len(x) - 1))
+            
+            # Find distances from line
+            distances = analysis_scores - line
+            
+            # Find knee point
+            knee_idx = np.argmax(distances) + 1  # +1 to include the knee point
+            
+            # Use knee detection to refine seed count
+            knee_seeds = knee_idx + int(knee_idx * 0.5)  # Add some margin to the knee
+            
+            current_app.logger.info(f"📊 Knee detection for seeds found knee at index {knee_idx}")
+            
+            # Take the larger of dynamic calculation and knee detection
+            k = max(dynamic_seeds, knee_seeds)
+        else:
+            k = dynamic_seeds
+        
+        # Apply reasonable bounds
+        min_seeds = max(3, min(10, total_chunks // 10))
+        max_seeds = min(total_chunks // 3, max(20, int(np.sqrt(total_chunks) * 5)))
+        k = max(min_seeds, min(max_seeds, k))
+        
+        current_app.logger.info(f"📊 Final seed count: {k} (min: {min_seeds}, max: {max_seeds})")
+        
         seeds = sims.argsort()[-k:][::-1].tolist()
-        current_app.logger.info(f"✅ Found {len(seeds)} initial seed chunks based on embedding similarity")
 
-        current_app.logger.info(f"🔍 Expanding graph with depth=2 from {len(seeds)} seed nodes")
-        expansion_limit = max(30, min(total_chunks, total_chunks // 3))
-        expanded = self._redisgraph_expand(seeds, max_depth=2, limit=expansion_limit)
+
+        if len(seeds) > 0:
+            seed_scores = [sims[i] for i in seeds]
+            avg_seed_score = np.mean(seed_scores)
+
+            depth = 1 if avg_seed_score > 0.7 else 2
+            current_app.logger.info(f"📊 Dynamic graph depth: {depth} (avg seed score: {avg_seed_score:.4f})")
+        else:
+            depth = 1
+        current_app.logger.info(f"🔍 Expanding graph with depth={depth} from {len(seeds)} seed nodes")
+        
+        # Dynamic expansion limit based on seeds and dataset
+        seed_count = len(seeds)
+        # Scale with diminishing returns as seed count increases
+        expansion_per_seed = max(3, min(10, 30 // (1 + np.log10(max(1, seed_count)))))
+        expansion_limit = min(total_chunks // 2, seed_count * expansion_per_seed)
+        current_app.logger.info(f"📊 Dynamic expansion limit: {expansion_limit} ({expansion_per_seed:.1f} per seed)")
+        
+        expand_start = time.time()
+        expanded = self._redisgraph_expand(seeds, max_depth=depth, limit=expansion_limit)
+        current_app.logger.info(f"⏱️ Graph expansion completed in {time.time() - expand_start:.3f}s")
         current_app.logger.info(f"✅ Graph expansion found {len(expanded)} additional connected chunks")
+        
+        # Combine seed and expanded nodes
         combined_idxs = list(seeds)
-
         for e in expanded:
             if e["idx"] not in combined_idxs:
                 combined_idxs.append(e["idx"])
         
+        # SUPER OPTIMIZATION: Process graph nodes with minimal overhead
+        chunks_len = len(self.all_chunks)
         current_app.logger.info(f"📊 Total unique graph nodes after expansion: {len(combined_idxs)}")
-        for idx in combined_idxs:
-            if idx < 0 or idx >= len(self.all_chunks):
-                current_app.logger.warning(f"⚠️ Graph returned invalid node index: {idx} (max index: {len(self.all_chunks)-1})")
-                continue
-                
-            cu = self.all_chunks[idx]
-            chunk = {
-                "text": cu.get("text", ""),
-                "source": cu.get("source", "No Source Available"),
+        
+        # Filter valid indices once in a list comprehension
+        valid_idxs = [idx for idx in combined_idxs if isinstance(idx, int) and 0 <= idx < chunks_len]
+        invalid_count = len(combined_idxs) - len(valid_idxs)
+        
+        # Only log invalid nodes if we actually have any
+        if invalid_count > 0:
+            current_app.logger.info(f"⚠️ Filtered out {invalid_count} invalid node indices from graph")
+        
+        # Fast bulk processing with minimal dictionary operations and string concatenation
+        graph_chunks_data = []
+        total_chars = 0
+        
+        # Pre-allocate for even better performance
+        graph_chunks = [None] * len(valid_idxs)
+        
+        # Process in one efficient batch
+        for i, idx in enumerate(valid_idxs):
+            chunk_data = self.all_chunks[idx]
+            text = chunk_data.get("text", "")
+            source = chunk_data.get("source", "No Source Available")
+            
+            # Create chunk dict directly without intermediate variables
+            graph_chunks[i] = {
+                "text": text,
+                "source": source,
                 "graph_node_idx": idx,
-                "retrieval_type": "graph"
+                "retrieval_type": "graph",
+                "embedding_idx": idx  # Store index for reusing embeddings later
             }
-            graph_chunks.append(chunk)
-            if chunk.get('source'):
-                source_files.add(chunk.get('source'))
+            
+            total_chars += len(text)
+            
+            # Track sources in the same loop
+            if source:
+                source_files.add(source)
+                
+        # Log total character count for monitoring
+        current_app.logger.info(f"📊 Retrieved {len(graph_chunks)} valid graph chunks with {total_chars} total characters")
+        current_app.logger.info(f"⏱️ Step 2 (Graph retrieval) completed in {time.time() - step2_start:.3f}s")
+        
+        # STEP 3: Merge and deduplicate chunks
+        step3_start = time.time()
         current_app.logger.info("🔍 [STEP 3] Merging and deduplicating chunks")
-        current_app.logger.info(f"📊 Before deduplication: {len(graph_chunks)} graph chunks, {len(semantic_chunks)} semantic chunks")
+        current_app.logger.info(f"📊 Before deduplication: {len(graph_chunks)} graph chunks ({total_chars} chars), {len(semantic_chunks)} semantic chunks")
         
         all_chunks_combined = graph_chunks + semantic_chunks
-
         all_relevant_chunks = deduplicate_chunks(all_chunks_combined, prioritize_graph=True)
-
+        
         current_app.logger.info(f"📊 After deduplication: {len(all_relevant_chunks)} unique chunks")
-        current_app.logger.info(f"📊 Breakdown: {len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'graph'])} graph chunks, {len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'semantic'])} semantic chunks")
+        graph_chunk_count = len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'graph'])
+        semantic_chunk_count = len([c for c in all_relevant_chunks if c.get('retrieval_type') == 'semantic'])
+        current_app.logger.info(f"📊 Breakdown: {graph_chunk_count} graph chunks, {semantic_chunk_count} semantic chunks")
+        
+        current_app.logger.info(f"⏱️ Step 3 (Deduplication) completed in {time.time() - step3_start:.3f}s")
 
+        # STEP 4: Re-rank chunks
+        step4_start = time.time()
         current_app.logger.info("🔍 [STEP 4] Re-ranking chunks based on relevance to query")
         texts = [c["text"] for c in all_relevant_chunks]
-        if texts:
+        
+        if not texts:
+            current_app.logger.warning("⚠️ No text content found in chunks")
+            context = ""
+            top_indices = []
+            sims = []
+        else:
+            # OPTIMIZATION: Reuse pre-computed embeddings where possible
             current_app.logger.info("📊 Computing similarity scores for re-ranking")
-            q_emb = self.st_model.encode([query])[0]
-            chunk_embs = self.st_model.encode(texts)
+            
+            # OPTIMIZATION: Use the same embedding that was computed at the beginning
+            q_emb = query_embedding
+            
+            # OPTIMIZATION: Avoid recomputing embeddings for graph-retrieved chunks
+            chunk_embs = []
+            reused_embeddings = 0
+            newly_computed = 0
+            
+            for chunk in all_relevant_chunks:
+                # If it's a graph chunk with a known embedding index, reuse from all_embeddings
+                if chunk.get("retrieval_type") == "graph" and "embedding_idx" in chunk:
+                    idx = chunk["embedding_idx"]
+                    if 0 <= idx < len(self.all_embeddings):
+                        chunk_embs.append(self.all_embeddings[idx])
+                        reused_embeddings += 1
+                        continue
+            
+            # Only compute new embeddings for chunks without pre-computed embeddings
+            remaining_texts = []
+            remaining_indices = []
+            
+            for i, chunk in enumerate(all_relevant_chunks):
+                if not (chunk.get("retrieval_type") == "graph" and 
+                        "embedding_idx" in chunk and 
+                        0 <= chunk["embedding_idx"] < len(self.all_embeddings)):
+                    remaining_texts.append(chunk["text"])
+                    remaining_indices.append(i)
+            
+            if remaining_texts:
+                current_app.logger.info(f"📊 Computing {len(remaining_texts)} new embeddings for remaining chunks")
+                new_embeddings = self.st_model.encode(remaining_texts, convert_to_numpy=True, normalize_embeddings=True)
+                newly_computed = len(remaining_texts)
+                
+                # Insert new embeddings at the correct positions
+                final_chunk_embs = [None] * len(all_relevant_chunks)
+                
+                # First, place the reused embeddings
+                for i, chunk in enumerate(all_relevant_chunks):
+                    if chunk.get("retrieval_type") == "graph" and "embedding_idx" in chunk:
+                        idx = chunk["embedding_idx"]
+                        if 0 <= idx < len(self.all_embeddings):
+                            final_chunk_embs[i] = self.all_embeddings[idx]
+                
+                # Then, insert the newly computed embeddings
+                for i, orig_idx in enumerate(remaining_indices):
+                    final_chunk_embs[orig_idx] = new_embeddings[i]
+                
+                chunk_embs = np.array(final_chunk_embs)
+            else:
+                # All embeddings were reused
+                chunk_embs = np.array(chunk_embs)
+            
+            current_app.logger.info(f"📊 Reused {reused_embeddings} embeddings, computed {newly_computed} new ones")
+            
+            # Now compute similarities with the query
             sims = cosine_similarity([q_emb], chunk_embs).flatten()
 
             available_chunks = len(all_relevant_chunks)
             
-            query_words = len(query.split())
-            is_complex_query = query_words > 10 or any(word in query.lower() for word in ['analyze', 'compare', 'detailed', 'comprehensive', 'all', 'every', 'list'])
+            # Sort scores in descending order
+            sorted_indices = np.argsort(sims)[::-1]
+            sorted_scores = sims[sorted_indices]
             
-            if is_complex_query:
-                max_context_chunks = min(available_chunks, max(20, available_chunks // 2))
-            else:
-                max_context_chunks = min(available_chunks, max(10, available_chunks // 3))
+            if len(sorted_scores) > 5:
+                top_mean = np.mean(sorted_scores[:5])
+                overall_mean = np.mean(sorted_scores[:min(30, len(sorted_scores))])
+                score_gap = top_mean - overall_mean
                 
-            top_k = max_context_chunks
-            top_indices = np.argsort(sims)[::-1][:top_k]
-            current_app.logger.info(f"📊 Selected top {len(top_indices)} chunks for context (query complexity: {'high' if is_complex_query else 'normal'})")
-
-            current_app.logger.info("📝 Building context for LLM prompt")
-            context_units = []
+                min_k = max(5, min(25, int(15 * (1.0 - min(0.9, score_gap * 5)))))
+                current_app.logger.info(f"📊 Dynamic minimum chunks: {min_k} (score gap: {score_gap:.4f})")
+            else:
+                # For very small result sets
+                min_k = 5
             
+            # Apply knee detection algorithm
+            knee_idx, complexity_score = detect_knee_point(sorted_scores, min_k=min_k)
+            
+            max_factor = 0.3 + (complexity_score * 0.4)  # Range from 30% to 70% based on complexity
+            max_allowed = min(available_chunks, max(25, int(available_chunks * max_factor)))
+            
+            # Determine final chunk count using knee index with reasonable bounds
+            top_k = min(max_allowed, max(min_k, knee_idx))
+            
+            # Use complexity score to determine if query is complex
+            is_complex_query = complexity_score > 0.5
+            
+            # Select top chunks based on calculated k
+            top_indices = sorted_indices[:top_k]
+            
+            current_app.logger.info(f"📊 Pure data-driven selection: {top_k} chunks (complexity score: {complexity_score:.2f})")
+            current_app.logger.info(f"📊 Selected {len(top_indices)}/{available_chunks} chunks for context")
+
+            # OPTIMIZATION: Build context with minimal overhead
+            current_app.logger.info("📝 Building context for LLM prompt")
+            
+            # Use dictionaries for fast lookups
+            context_by_source = {}
+            top_sources_by_similarity = {}
+            
+            # Compile regex patterns once instead of repeatedly
+            import re
+            url_pattern = re.compile(r"^https?://")
+            number_pattern = re.compile(r'\d+')
+            
+            # Check if we need special ID handling once instead of per chunk
+            needs_id_info = any(pattern in query.lower() for pattern in ['id', 'number', 'amount', 'date', 'order'])
+            
+            # Process chunks in a single pass with minimal string operations
             for i in top_indices:
                 chunk = all_relevant_chunks[i]
+                chunk_text = chunk.get('text', '')
                 src = chunk.get("source", "Unknown Source")
-                retrieval_type = chunk.get("retrieval_type", "unknown")
-                similarity_score = sims[i]
+                sim_score = float(sims[i])
                 
-                current_app.logger.info(f"📄 Including chunk from {src} (type: {retrieval_type}, similarity: {similarity_score:.4f})")
+                # Initialize source entry if needed
+                if src not in context_by_source:
+                    context_by_source[src] = []
                 
-                chunk_text = chunk['text']
+                # Update max similarity tracking
+                if src not in top_sources_by_similarity or sim_score > top_sources_by_similarity[src]:
+                    top_sources_by_similarity[src] = sim_score
                 
-                if any(pattern in query.lower() for pattern in ['id', 'number', 'amount', 'date', 'order']):
-                    import re
+                # Only do extra document ID processing if needed based on query
+                if needs_id_info:
                     filename_base = os.path.splitext(os.path.basename(src))[0]
+                    numbers_in_filename = number_pattern.findall(filename_base)
                     
-                    numbers_in_filename = re.findall(r'\d+', filename_base)
                     if numbers_in_filename:
                         chunk_text = f"[DOCUMENT: {filename_base} - Contains: {', '.join(numbers_in_filename)}]\n{chunk_text}"
                 
-                import re
-                url_pattern = r"^https?://"
-                if re.match(url_pattern, src):
-                    context_units.append(f"**Source Document:** {src}\n**Content:** {chunk_text}")
+                # Format content with minimal branching - handle URLs vs files differently
+                if url_pattern.match(src):
+                    # For URLs, use the URL directly with domain name for better context
+                    from urllib.parse import urlparse
+                    parsed_url = urlparse(src)
+                    domain = parsed_url.netloc
+                    src_display = f"{domain}{parsed_url.path}"
+                    current_app.logger.info(f"📄 Using URL source in context: {src}")
                 else:
-                    context_units.append(f"**Source Document:** {os.path.basename(src)}\n**Content:** {chunk_text}")
+                    # For files, just use the filename
+                    src_display = os.path.basename(src)
+                    current_app.logger.info(f"📄 Using file source in context: {src_display}")
                 
-                if src:
-                    source_files.add(src)
+                formatted_content = f"**Source Document:** {src_display}\n**Content:** {chunk_text}"
+                
+                # Store context with all needed metadata
+                context_by_source[src].append({
+                    "text": formatted_content,
+                    "similarity": sim_score,
+                    "idx": i
+                })
+                
+                # Track source files in one pass
+                source_files.add(src)
+            
+            # Sort and flatten in one go for better performance
+            context_units = []
+            
+            # First sort each source's chunks by similarity
+            for src, chunks in context_by_source.items():
+                # Sort in place to avoid creating new lists
+                chunks.sort(key=lambda x: x["similarity"], reverse=True)
+                # Extract text directly to final list
+                for chunk in chunks:
+                    context_units.append(chunk["text"])
 
             context = "\n---\n".join(context_units)
-            current_app.logger.info(f"📊 Final context built with {len(context_units)} chunks")
-        else: 
-            current_app.logger.warning("⚠️ No text content found in chunks")
-            context = ""
-            top_indices = []
+            
+            # Get the top 3 sources that contributed to context, based on highest similarity score
+            used_sources = sorted(top_sources_by_similarity.keys(), key=lambda s: top_sources_by_similarity[s], reverse=True)
+            top_context_sources = used_sources[:3]
+            
+            # Log the sources used for context, with statistics
+            current_app.logger.info(f"📊 Sources contributing to context (top {len(top_context_sources)} of {len(used_sources)}):")
+            for src in top_context_sources:
+                current_app.logger.info(f"📄 Source: {src} | Max similarity: {top_sources_by_similarity[src]:.4f}")
+                
+            current_app.logger.info(f"📊 Final context built with {len(context_units)} chunks from {len(context_by_source)} sources")
+        
+        current_app.logger.info(f"⏱️ Step 4 (Re-ranking) completed in {time.time() - step4_start:.3f}s")
+        
+        # OPTIMIZATION: Track top sources more efficiently
         top_sources = []
         seen_sources = set()
         source_reasons = {}
-        for i in top_indices:
-            chunk = all_relevant_chunks[i]
-            src = chunk.get("source", "")
-            if src and src not in seen_sources:
-                top_sources.append(src)
-                seen_sources.add(src)
-                reason = {
-                    "picked_text": chunk["text"],
-                    "similarity_score": float(sims[i]),
-                    "retrieval_type": chunk.get("retrieval_type", "unknown"),
-                    "query": query
-                }
-                source_reasons[src] = reason
-                current_app.logger.info(f"🔎 Source picked: {src} | Reason: {reason}")
+        
+        if len(top_indices) > 0:
+            # Sort sources by highest similarity score
+            source_max_sim = {}
+            source_best_chunk = {}
+            
+            for i in top_indices:
+                chunk = all_relevant_chunks[i]
+                src = chunk.get("source", "")
+                
+                if not src:
+                    continue
+                    
+                if src not in source_max_sim or sims[i] > source_max_sim[src]:
+                    source_max_sim[src] = float(sims[i])
+                    source_best_chunk[src] = {
+                        "picked_text": chunk["text"],
+                        "similarity_score": float(sims[i]),
+                        "retrieval_type": chunk.get("retrieval_type", "unknown"),
+                        "query": query
+                    }
+            
+            # Sort sources by similarity score
+            sorted_sources = sorted(source_max_sim.keys(), key=lambda s: source_max_sim[s], reverse=True)
+            top_sources = sorted_sources
+            
+            # Log reasons for top sources
+            for src in sorted_sources[:3]: 
+                source_reasons[src] = source_best_chunk[src]
+                current_app.logger.info(f"🔎 Source picked: {src} | Similarity: {source_max_sim[src]:.4f}")
 
         unique_sources = len(top_sources)
 
+        # STEP 5: Build prompt and generate response
+        step5_start = time.time()
         current_app.logger.info("🔍 [STEP 5] Building LLM prompt with context")
+        
         prompt = (
-                "You are an expert document analyst. Your task is to thoroughly examine ALL provided context and extract EVERY relevant piece of information that answers the user's question.\n\n"
-                f" Context from {unique_sources} document sources:\n{context}\n\n"
-                f" User Query: {query}\n\n"
-                "**CRITICAL INSTRUCTIONS - READ CAREFULLY:**\n"
-                " COMPREHENSIVE ANALYSIS REQUIRED:\n"
-                "- Examine EVERY SINGLE document excerpt in the context above\n"
-                "- Do NOT stop after finding just a few items - search through ALL content\n"
-                "- Look for patterns, numbers, IDs, names, dates, or ANY data points relevant to the query\n"
-                "- If the query asks for a list or collection, find ALL instances across ALL documents\n"
-                "- Process each document section systematically and thoroughly\n\n"
-                " PROCESSING APPROACH:\n"
-                "- Scan through each source document methodically\n"
-                "- Cross-reference information between documents\n"
-                "- Consolidate findings from multiple sources\n"
-                "- Present information in a clear, organized manner\n"
-                "- Include quantitative details when available (counts, amounts, percentages, etc.)\n\n"
-                " QUALITY STANDARDS:\n"
-                "- Be exhaustive in your search - don't miss any relevant data\n"
-                "- Maintain accuracy - only include information explicitly stated in the context\n"
-                "- If information spans multiple documents, synthesize it comprehensively\n"
-                "- For numerical data, include specific values, not approximations\n"
-                "- If you cannot find sufficient information, respond only with the context information with the related answer.\n\n"
-                "🎯 OUTPUT REQUIREMENTS:\n"
-                "- Provide complete, thorough responses\n"
-                "- Structure your answer logically\n"
-                "- Include all relevant findings, not just highlights\n"
-                "- Be comprehensive.\n\n"
-                "- At the end of your answer, add a line: Sources Used: <comma-separated list of source document names you used for your answer, up to 3>"
-            )
+    "ROLE:\n"
+    "You are an expert document analyst. Use ONLY the provided CONTEXT. "
+    "If the query cannot be answered from CONTEXT, output exactly: [NO_ANSWER].\n\n"
+
+    f"CONTEXT (from {unique_sources} document sources):\n"
+    f"{context}\n\n"
+
+    f"USER QUERY:\n{query}\n\n"
+
+    "OUTPUT CONTRACT (FOLLOW ALL):\n"
+    "A) Truth & Scope\n"
+    "- Never invent facts. If unsupported → [NO_ANSWER]. If partially supported, state only what is supported.\n\n"
+
+    "B) Substance & Length\n"
+    "- Default to 2–4 short paragraphs (~150–300 words total) when explanation is needed.\n"
+    "- After paragraphs, include a compact bullet list of 3–7 items for steps/fields/takeaways when relevant.\n\n"
+
+    "C) Layout & Spacing (HARD RULES)\n"
+    "- Paragraphs: each separated by exactly ONE blank line (i.e., a single '\\n\\n').\n"
+    "- Bullets: each bullet on its own line, prefixed by '• ' (U+2022 + space). No numbering unless present in CONTEXT.\n"
+    "- Bullet blocks: one blank line BEFORE the bullet block and one AFTER it.\n"
+    "- Sub-bullets (only if needed): prefix with '– ' and indent with a single space after the main bullet line.\n"
+    "- No trailing spaces; no double blank lines anywhere.\n"
+    "- If an HTML table is emitted, put ONE blank line before it and ONE blank line after it.\n\n"
+
+    "D) Table Decision (MANDATORY HEURISTICS)\n"
+    "- Emit an HTML table fragment when comparing ≥2 items, listing many similar items with shared fields, "
+    "showing metrics/specs/timelines/schedules, or when the user asks list/compare/overview/top N/differences/fields/schema.\n"
+    "- If a table is emitted, ALSO include a 1–2 sentence summary paragraph adjacent to it (above or below).\n\n"
+
+    "E) HTML TABLE RULES (apply ONLY when emitting a table)\n"
+    "- Output a fragment ONLY (no <!DOCTYPE>, <html>, <head>, <body>, <style>, or code fences).\n"
+    "- Structure EXACTLY:\n"
+    "  <table>\n"
+    "    <thead><tr><th>…</th></tr></thead>\n"
+    "    <tbody><tr><td>…</td></tr></tbody>\n"
+    "  </table>\n"
+    "- One <th> per column; one <td> per cell; keep columns ≤ 8 when possible.\n"
+    "- Mark numeric cells with class='numeric'.\n"
+    "- If >25 rows, show the most relevant 10–25 and say more exist.\n\n"
+
+    "F) Style\n"
+    "- Plain language. Keep jargon only if present in CONTEXT. Prefer concrete specifics over vague phrasing.\n\n"
+
+    "G) Final Self-Check BEFORE sending\n"
+    "- If unsupported → [NO_ANSWER].\n"
+    "- If a table is present, confirm the exact fragment structure and numeric class usage.\n"
+    "- Confirm paragraphs/bullets/table are separated with EXACT spacing rules above. No code fences; no visible citations.\n\n"
+
+    "H) Source Tracking (REQUIRED, hidden)\n"
+    '- Append EXACTLY at the very end:\n'
+    '  <div class=\"sources-used\" style=\"display:none\">[comma-separated filenames/URLs used, in importance order]</div>\n'
+)
+
         try:
+            import re
+            llm_start = time.time()
             current_app.logger.info("🔍 [STEP 6] Generating response with LLM")
-            current_app.logger.info(f"📝 Sending comprehensive prompt with {len(prompt)} characters to LLM")
+            current_app.logger.info(f"📝 Sending prompt with {len(prompt)} characters to LLM")
+            
             raw_response = self.llm.model.invoke(prompt)
+            llm_time = time.time() - llm_start
+            
             response_text = str(raw_response.content).strip()
-            current_app.logger.info(f"✅ LLM generated a response of {len(response_text)} characters")
+            current_app.logger.info(f"✅ LLM generated a response of {len(response_text)} characters in {llm_time:.3f}s")
 
             if "[NO_ANSWER]" in response_text:
                 current_app.logger.warning("⚠️ LLM indicated insufficient information")
                 return {"answer": "I don't have enough information.", "source": None}
-
-            import re
+                
             sources_used = []
-            match = re.search(r"Sources Used:\s*(.*)", response_text)
-            if match:
-                sources_line = match.group(1)
-                sources_used = [s.strip() for s in sources_line.split(",") if s.strip()]
-                sources_used = sources_used[:3]
-                response_text = re.sub(r"Sources Used:.*", "", response_text).strip()
+            # Compile regex once for better performance
+            sources_pattern = re.compile(r'<div class="sources-used" style="display:none">(.*?)</div>', re.IGNORECASE | re.DOTALL)
+            sources_match = sources_pattern.search(response_text)
+            
+            if sources_match:
+                # Extract the sources from the hidden div
+                sources_text = sources_match.group(1).strip()
+                # Split by comma and clean up each source in one comprehension
+                raw_sources = [s.strip() for s in sources_text.split(',') if s.strip()]
+                
+                # Create a lookup dictionary for faster source matching
+                filename_to_source = {os.path.basename(full_src): full_src for full_src in used_sources}
+                
+                # Check for URLs in used_sources for direct mapping
+                import re
+                url_pattern = re.compile(r"^https?://")
+                
+                for raw_src in raw_sources:
+                    # Remove HTML tags if present in source
+                    clean_src = re.sub(r'<.*?>', '', raw_src).strip()
+                    
+                    # Check if this source is a URL first - preserve complete URL
+                    if url_pattern.match(clean_src):
+                        current_app.logger.info(f"📄 Extracted URL source from LLM: {clean_src}")
+                        sources_used.append(clean_src)
+                        continue
+                        
+                    # Check if this might be a URL with the http/https prefix removed
+                    if '.' in clean_src and '/' in clean_src and not ' ' in clean_src:
+                        if not clean_src.startswith('http'):
+                            possible_url = f"https://{clean_src}"
+                            if url_pattern.match(possible_url):
+                                current_app.logger.info(f"📄 Added prefix to URL source: {possible_url}")
+                                sources_used.append(possible_url)
+                                continue
+                    
+                    # For filenames, try to match to full source paths - exact matches only, no fuzzy matching
+                    if raw_src in filename_to_source:
+                        full_path = filename_to_source[raw_src]
+                        # If the full path is a URL, keep it as is
+                        if url_pattern.match(full_path):
+                            current_app.logger.info(f"📄 Mapped LLM source to URL: {full_path}")
+                            sources_used.append(full_path)
+                        else:
+                            current_app.logger.info(f"📄 Mapped LLM source to file: {raw_src}")
+                            sources_used.append(full_path)
+                        continue
+
+                    # Fallback: just use the raw source as provided by LLM
+                    sources_used.append(clean_src)
+                
+                # Remove the hidden div from the response - do this only once
+                response_text = sources_pattern.sub('', response_text).strip()
+                current_app.logger.info(f"🔍 Extracted {len(sources_used)} sources actually used by the LLM")
             else:
-                sources_used = top_sources[:3]
+                current_app.logger.info("⚠️ No source information provided by LLM, using context sources")
+                sources_used = top_context_sources
+            
+            sources_used = sources_used[:3]
+            
+            if "Sources:" in response_text or "Sources Used:" in response_text:
+                response_text = re.sub(r"(?:Sources|Sources Used):\s*.*?(?:\n|$)", "", response_text, flags=re.IGNORECASE|re.DOTALL).strip()
+                current_app.logger.info("🔄 Removed explicit source citations from LLM response")
+                
+                
+            # Check for HTML tables (routes.py will handle the formatting)
+            if "<table" in response_text:
+                table_count = response_text.count("<table")
+                current_app.logger.info(f"📊 Response contains {table_count} HTML tables")
 
+            # Set primary source to the most relevant source that actually contributed chunks
+            # Don't modify the source - keep it exactly as it was provided
             primary_source = sources_used[0] if sources_used else None
-            if len(top_indices) > 0:
-                top_chunk = all_relevant_chunks[top_indices[0]]
-                if top_chunk.get('source'):
-                    primary_source = top_chunk.get('source')
-                    current_app.logger.info(f"📄 Primary source set to: {primary_source}")
+            if primary_source:
+                # Don't extract just the filename - keep the full URL or path
+                current_app.logger.info(f"📄 Primary source set to: {primary_source} (highest relevance in context)")
 
-            graph_chunk_count = len([c for c in all_relevant_chunks if c.get("retrieval_type") == "graph"])
-            semantic_chunk_count = len([c for c in all_relevant_chunks if c.get("retrieval_type") == "semantic"])
-            current_app.logger.info(f"""
-            📊 [PERFORMANCE METRICS]
-            - Total chunks considered: {len(all_relevant_chunks)}
-            - Graph-based chunks: {graph_chunk_count}
-            - Semantic chunks: {semantic_chunk_count}
-            - Source files referenced: {len(source_files)}
-            - Response length: {len(response_text)} characters
-            """)
+            # Collect metrics once with optimized counting
+            graph_chunk_count = sum(1 for c in all_relevant_chunks if c.get("retrieval_type") == "graph")
+            semantic_chunk_count = len(all_relevant_chunks) - graph_chunk_count  
+            
+            total_time = time.time() - start_time
+            
+            # Only log essential performance metrics (reduce logging overhead)
+            current_app.logger.info(f"⏱️ Total processing time: {total_time:.3f}s, LLM: {llm_time:.3f}s")
 
+            # Use the sources that were actually used by the LLM (already limited to top 3)
+            final_sources = sources_used
+            
+                # Process sources to handle URLs and files differently
+            processed_sources = []
+            import re
+            url_pattern = re.compile(r"^https?://")
+            
+            for src in final_sources:
+                if not src:
+                    continue
+                
+                # Clean any HTML that might be in the source
+                clean_src = re.sub(r'<.*?>', '', str(src)).strip()
+                
+                # Check if this source is a URL - preserve complete URL
+                if url_pattern.match(clean_src):
+                    current_app.logger.info(f"📄 Using URL source directly: {clean_src}")
+                    processed_sources.append(clean_src)
+                # Check if this is a file ending with .html or .htm - likely a URL source
+                elif clean_src.endswith(('.html', '.htm')):
+                    # Check if we have a matching URL source in our context
+                    found_url = None
+                    for context_src in top_context_sources:
+                        if clean_src in context_src and url_pattern.match(context_src):
+                            found_url = context_src
+                            break
+                    
+                    # If we found a matching URL, use it directly
+                    if found_url:
+                        current_app.logger.info(f"📄 Mapped HTML file to URL source: {found_url}")
+                        processed_sources.append(found_url)
+                    else:
+                        # Try to rebuild the URL from the original source
+                        base_url = "https://www.solix.com/solutions/"
+                        possible_url = f"{base_url}{clean_src.replace('.html', '')}"
+                        current_app.logger.info(f"📄 Constructed URL for HTML file: {possible_url}")
+                        processed_sources.append(possible_url)
+                # Check for URL-like structures that might be missing the http prefix
+                elif ('.' in clean_src and '/' in clean_src and not ' ' in clean_src):
+                    possible_url = f"https://{clean_src}" if not clean_src.startswith('http') else clean_src
+                    current_app.logger.info(f"📄 Treating as URL: {possible_url}")
+                    processed_sources.append(possible_url)
+                else:
+                    # For files, extract just the filename for proper download handling
+                    filename = os.path.basename(clean_src) if os.path.sep in clean_src else clean_src
+                    current_app.logger.info(f"📄 Using file source in response: {filename}")
+                    processed_sources.append(filename)            # Final cleanup of the response (minimal processing)
+            response_text = response_text.strip()
+                
             return {
                 "answer": response_text,
-                "sources": sources_used,
-                "stats": {
-                    "total_chunks": len(all_relevant_chunks),
-                    "graph_chunks": graph_chunk_count,
-                    "semantic_chunks": semantic_chunk_count,
-                    "source_files": len(source_files),
-                    "unique_sources": len(sources_used)
-                }
+                "sources": processed_sources
             }
 
         except Exception as e:
             current_app.logger.error(f"❌ LLM call failed: {str(e)}", exc_info=True)
-            return {"answer": "There was an error while generating the response.", "source": None}
+            total_time = time.time() - start_time
+            current_app.logger.error(f"⏱️ Failed execution total time: {total_time:.3f}s")
+            return {"answer": "There was an error while generating the response.", "sources": []}
