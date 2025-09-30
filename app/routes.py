@@ -33,6 +33,7 @@ import pandas as pd
 import vanna
 from sqlalchemy import create_engine
 import app.data_profiling_embedding as dpe
+from urllib.parse import urlparse, urlunparse
 
 from app.hpostgres import store_in_postgres
 
@@ -1055,6 +1056,17 @@ def docupload():
     except Exception as e:
         current_app.logger.error(str(e), exc_info=True)
         return jsonify({"error": str(e)}), 500
+    
+def generate_external_url(endpoint, **values):
+    base_url = url_for(endpoint, _external=True, **values)
+    parsed = urlparse(base_url)
+
+    custom_port = os.environ.get("EXTERNAL_URL_PORT","5000")
+    if custom_port:
+        netloc = f"{parsed.hostname}:{custom_port}"
+        parsed = parsed._replace(netloc=netloc)
+
+    return urlunparse(parsed)
 
 @main.route("/graph/query", methods=["POST"])
 def graph_query():
@@ -1149,7 +1161,7 @@ def graph_query():
                             current_app.logger.info(f"HTML file mapped to existing URL: {found_url}")
                         else:
                             # If no URL found, create a reference without hardcoding domain
-                            file_url = url_for('main.download_graph_file', filename=src, _external=True)
+                            file_url = generate_external_url('main.download_graph_file', filename=filename)
                             formatted_sources.append({"name": src, "url": file_url})
                             current_app.logger.info(f"HTML file with no URL match: using download handler")
                     else:
@@ -1162,7 +1174,7 @@ def graph_query():
                             filename = os.path.basename(src)
                         
                         # Generate URL with the filename
-                        file_url = url_for('main.download_graph_file', filename=filename, _external=True)
+                        file_url = generate_external_url('main.download_graph_file', filename=filename)
                         formatted_sources.append({"name": filename, "url": file_url})
                         current_app.logger.info(f"File source: {filename}")
         if formatted_sources:
