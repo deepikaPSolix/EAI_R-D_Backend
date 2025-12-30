@@ -5,6 +5,7 @@ uploads
 ml-model
 chroma.log
 venv
+myenv
 cache
 *.log
 dist/
