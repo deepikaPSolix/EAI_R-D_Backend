@@ -144,6 +144,23 @@ class MyVanna(LLMModel_Chat, ChromaDB_VectorStore):
     def list_document_names(self):
         return set(MyVanna.document_store.values())
     
+    def generate_sql(self, *args, **kwargs):
+        sql = super().generate_sql(*args, **kwargs)
+
+        # 🔴 Intercept Vanna's string-based failure
+        if isinstance(sql, str) and sql.startswith("Error running intermediate SQL"):
+            current_app.logger.info(
+                "Vanna attempted intermediate SQL without DB connection",
+                extra={
+                    "error": sql,
+                    "run_sql_is_set": self.run_sql_is_set,
+                }
+            )
+            return sql
+
+        return sql
+
+    
     def get_sql_prompt(
         self,
         initial_prompt : str,
@@ -197,9 +214,6 @@ class MyVanna(LLMModel_Chat, ChromaDB_VectorStore):
              """1. You MUST reference ONLY tables / columns that exist in the supplied DDL / metadata.
                     • For each requested attribute, find an exact or clear-synonym column name.
                     • If no match exists, you MUST NOT invent a name.
-                        - Instead, either:
-                        a) produce an `intermediate_sql` query to discover the correct column,  OR
-                        b) return `NULL AS "<Friendly-Name>"  -- UNMAPPED`.
                     • Violating this rule is considered an error; regenerate until compliant.\n"""
             "2. If the provided context is sufficient, please generate a valid SQL query without any explanations for the question. \n"
             "3. If the provided context is almost sufficient but requires knowledge of a specific string in a particular column, please generate an intermediate SQL query to find the distinct strings in that column. Prepend the query with a comment saying intermediate_sql \n"
