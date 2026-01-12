@@ -147,7 +147,6 @@ class MyVanna(LLMModel_Chat, ChromaDB_VectorStore):
     def generate_sql(self, *args, **kwargs):
         sql = super().generate_sql(*args, **kwargs)
 
-        # 🔴 Intercept Vanna's string-based failure
         if isinstance(sql, str) and sql.startswith("Error running intermediate SQL"):
             current_app.logger.info(
                 "Vanna attempted intermediate SQL without DB connection",
