@@ -652,13 +652,13 @@ def query_vanna(data=None):
             current_app.logger.info(f"Vanna.AI run_sql query attempt {counter + 1}:")
             # ✅ Ask Vanna.AI a question
             sql, df, fig = vn.ask(
-                question=vanna_query,
-                print_results=False,
-                auto_train=False,
-                visualize=True,
-                allow_llm_to_see_data=True
-            )
-
+            question=vanna_query,
+            print_results=False,
+            auto_train=False,
+            visualize=True,
+            allow_llm_to_see_data=True
+             )
+           
             if type(df) == Exception or type(df) == vanna.exceptions.ValidationError:
                 vanna_query += f"\n Attempted query: {sql} Result: {df}"
                 counter += 1
@@ -686,7 +686,8 @@ def query_vanna(data=None):
         current_app.logger.error(str(e), exc_info=True)
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
-@main.route('/rag/query', methods=["POST"])
+
+@main.route('/api/rag/query', methods=["POST"])
 def query_rag():
     try:
         data = request.get_json()
