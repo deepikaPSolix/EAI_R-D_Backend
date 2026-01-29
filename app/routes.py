@@ -68,7 +68,7 @@ def home():
     return "<p> Welcome to EAI Application solix docker test!!!</p>"
 
 
-@main.route("/api/trials", methods=["GET"])
+@main.route("/trials", methods=["GET"])
 def trials_and_analyze_inline():
     # 1) grab query params
     condition = request.args.get("condition","")
@@ -131,7 +131,7 @@ def trials_and_analyze_inline():
     }), 200
 
 
-@main.route('/api/filecontents/<filename>', methods=["GET"])
+@main.route('/filecontents/<filename>', methods=["GET"])
 def serve_file(filename):
     print("Hi")
     print(filename)
@@ -146,7 +146,7 @@ def serve_file(filename):
     
 
 
-@main.route("/api/docs/uploadandtrain", methods=['POST'])
+@main.route("/docs/uploadandtrain", methods=['POST'])
 def cluster_and_classify():
     try:
         if 'files[]' not in request.files:
@@ -171,24 +171,20 @@ def cluster_and_classify():
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
-@main.route('/api/transcribe', methods=['POST'])
+@main.route('/transcribe', methods=['POST'])
+
 def transcribe():
     current_app.logger.info(f"Audio received. Processing .......")
     if 'audio' not in request.files:
         return jsonify({'error': 'No audio file provided'}), 400
-
     audio_file = request.files['audio']
-
     # Save the uploaded WebM blob
     with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as f:
         audio_file.save(f.name)
         webm_path = f.name
-
     wav_path = webm_path.replace(".webm", ".wav")
-
     # Convert to WAV (Whisper prefers it)
     subprocess.run(['ffmpeg', '-i', webm_path, wav_path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
     try:
         processor = AudioFileProcessor()
         transcript = processor.extract_text_from_audio(wav_path)
@@ -224,7 +220,7 @@ def classify():
 
     return jsonify({"labels": labels.to_json(orient='records')}), 201
 
-@main.route('/api/vanna/train/generatedoc', methods=["POST"])
+@main.route('/vanna/train/generatedoc', methods=["POST"])
 def train_vanna_generate_doc():
     try:
         vn = MyVanna()
@@ -304,7 +300,7 @@ def profiling_embedding(vn):
         raise e
     return response
 
-@main.route('/api/vanna/train/doc', methods=["POST"])
+@main.route('/vanna/train/doc', methods=["POST"])
 def train_vanna_doc():
     try:
         files = request.files.getlist('files[]') if 'files[]' in request.files else []
@@ -344,9 +340,9 @@ def train_vanna_doc():
     except Exception as e:
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
-
-
-@main.route('/api/vanna/train/ddl', methods=["POST"])
+    
+    
+@main.route('/vanna/train/ddl', methods=["POST"])
 def train_vanna_ddl():
     try:
         if 'files[]' not in request.files:
@@ -428,7 +424,7 @@ def create_metadata_from_csv_ddl(ddl_statements, df, vn):
 
     return generated_doc
 
-@main.route('/api/vanna/train/rawdata', methods=["POST"])
+@main.route('/vanna/train/rawdata', methods=["POST"])
 def train_vanna_raw():
     try:
         if 'files[]' not in request.files:
@@ -477,7 +473,7 @@ def train_vanna_raw():
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error at train_vanna_raw(): {str(e)}"}), 500
 
-@main.route('/api/dbconnect', methods=["POST"])
+@main.route('/dbconnect', methods=["POST"])
 def store_db_details(details: Dict[str, str]):
     """
     Store database connection details in env.
@@ -491,14 +487,14 @@ def store_db_details(details: Dict[str, str]):
     return jsonify({"message": "Database connection details stored successfully"}), 200
 
 
-@main.route('/api/dbconnect', methods=["GET"])
+@main.route('/dbconnect', methods=["GET"])
 def get_db_connection(details: Dict[str, str]):
     
     conn = open_db_connection()
     current_app.logger.info("Connected!")
     return conn, 200
 
-@main.route('/api/dbconnect', methods=["DELETE"])
+@main.route('/dbconnect', methods=["DELETE"])
 def delete_db_details():
     """
     Delete database connection details in env.
@@ -511,11 +507,11 @@ def delete_db_details():
     
     return jsonify({"message": "Database connection details deleted successfully"}), 200
 
-@main.route('/api/dbconnect/details', methods=["GET"])
+@main.route('/dbconnect/details', methods=["GET"])
 def get_db_connection_details():
     return jsonify({"host":os.getenv("DB_HOST"), "dbname":os.getenv("DB_NAME"), "user":os.getenv("DB_USER")}), 200
-
-@main.route('/api/vanna/dbconnect', methods=["POST"])
+    
+@main.route('/vanna/dbconnect', methods=["POST"])
 def vanna_db_connect():
     data = request.get_json()
     if not data:
@@ -555,7 +551,7 @@ def vanna_db_connect():
     })
     return jsonify({"success": True, "message": "Connected to database successfully"}), 200
 
-@main.route('/api/docs/vanna', methods=["DELETE"])
+@main.route('/docs/vanna', methods=["DELETE"])
 def del_vanna_training_data():
     vn = MyVanna()
     res = []
@@ -567,27 +563,27 @@ def del_vanna_training_data():
     vn.delete_all()
     return res, 202
 
-@main.route('/api/docs/vanna/id/<id>', methods=["DELETE"])
+@main.route('/docs/vanna/id/<id>', methods=["DELETE"])
 def del_vanna_training_data_by_id(id):
     vn = MyVanna()
     removed = vn.remove_training_data(id=id)
     vn.delete_document(id)
     return jsonify({"id": id, "removed" : removed}), 202
 
-@main.route('/api/docs/vanna', methods=["GET"])
+@main.route('/docs/vanna', methods=["GET"])
 def get_vanna_training_data():
     vn = MyVanna()
     df = vn.get_training_data()
     df_list = df.to_dict(orient='list')
     return df_list["id"], 202
 
-@main.route('/api/docs/vanna/names', methods=["GET"])
+@main.route('/docs/vanna/names', methods=["GET"])
 def get_vanna_training_data_names():
     vn = MyVanna()
     names = vn.list_document_names()
     return list(names), 202
 
-@main.route('/api/docs/vanna/id/<id>', methods=["GET"])
+@main.route('/docs/vanna/id/<id>', methods=["GET"])
 def get_vanna_doc_from_db_id(id):
     vn = MyVanna()
     doc_id = vn.get_document(id)
@@ -595,7 +591,7 @@ def get_vanna_doc_from_db_id(id):
         return jsonify({"error": "Document not found"}), 404
     return doc_id, 202
 
-@main.route('/api/rag2/query/vanna', methods=["POST"])
+@main.route('/rag2/query/vanna', methods=["POST"])
 def query_vanna(data=None):
     result_reason = f"No results found for query"
     try:
@@ -712,7 +708,7 @@ def query_rag():
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     
 
-@main.route('/api/rag2/query', methods=["POST"])
+@main.route('/rag2/query', methods=["POST"])
 def query_rag2():
     try:
         data = request.get_json()
@@ -803,7 +799,7 @@ def get_status(task_id):
         return jsonify({"state": task.state})
 
 
-@main.route('/api/docs', methods = ["GET"])
+@main.route('/docs', methods = ["GET"])
 def fetch_docs():
     global doc_updates
     try:
@@ -820,7 +816,7 @@ def fetch_docs():
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
 
-@main.route('/api/docs', methods=['PATCH'])
+@main.route('/docs', methods=['PATCH'])
 def update_docs():
     global doc_updates
     try:
@@ -840,7 +836,7 @@ def update_docs():
         current_app.logger.error(str(e))
         return jsonify({"error": f"Internal Server Error: {str(e)}"}), 500
     
-@main.route('/api/docs', methods=['DELETE'])
+@main.route('/docs', methods=['DELETE'])
 def delete_docs():
     global doc_updates
     try:
@@ -869,7 +865,7 @@ def delete_docs():
     
 # Eval Routes
 
-@main.route('/api/sensitivityEvalApi',methods=["GET"])
+@main.route('/sensitivityEvalApi',methods=["GET"])
 def sensitivityEvalResults():
     try:
         EVALUATION_RESULTS_FILE = './cache/sensitivityEvaluation.json'
@@ -890,8 +886,8 @@ def sensitivityEvalResults():
     except Exception as e:
         print(f"Error fetching evaluation results: {e}")
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
-
-@main.route('/api/attributesEvalApi',methods=["GET"])
+    
+@main.route('/attributesEvalApi',methods=["GET"])
 def attributesEvalResults():
     try:
         EVALUATION_RESULTS_FILE = './cache/fileAttributesResult.json'
@@ -912,8 +908,8 @@ def attributesEvalResults():
     except Exception as e:
         print(f"Error fetching evaluation results: {e}")
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
-
-@main.route('/api/clusterEvalApi',methods=["GET"])
+    
+@main.route('/clusterEvalApi',methods=["GET"])
 def clusterEvalResults():
     try:
         EVALUATION_RESULTS_FILE = './cache/fileClusterResult.json'
@@ -934,8 +930,8 @@ def clusterEvalResults():
     except Exception as e:
         print(f"Error fetching evaluation results: {e}")
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
-
-@main.route('/api/rag1EvalApi',methods=["GET"])
+    
+@main.route('/rag1EvalApi',methods=["GET"])
 def rag1EvalResults():
     try:
         EVALUATION_RESULTS_FILE = './cache/queryEvaluationScreen1Results.json'
@@ -958,7 +954,7 @@ def rag1EvalResults():
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
     
 
-@main.route('/api/rag2EvalApi',methods=["GET"])
+@main.route('/rag2EvalApi',methods=["GET"])
 def rag2EvalResults():
     try:
         EVALUATION_RESULTS_FILE = './cache/queryEvaluationScreen2Result.json'
@@ -981,7 +977,7 @@ def rag2EvalResults():
         return jsonify({"error": "Internal Server Error", "message": str(e)}), 500
 
 chunks = None
-@main.route("/api/graph/process", methods=["POST"])
+@main.route("/graph/process", methods=["POST"])
 def process_graph():
     nest_asyncio.apply()
     try:
@@ -1011,7 +1007,7 @@ def process_graph():
         current_app.logger.error(f"Processing error: {str(e)}",exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-@main.route("/api/graph/uploaddocs", methods=['POST'])
+@main.route("/graph/uploaddocs", methods=['POST'])
 def docupload():
     try:
         if 'files[]' not in request.files:
@@ -1069,7 +1065,7 @@ def generate_external_url(endpoint, **values):
 
     return urlunparse(parsed)
 
-@main.route("/api/graph/query", methods=["POST"])
+@main.route("/graph/query", methods=["POST"])
 def graph_query():
     try:
         import re # Import re module at the beginning of the function
@@ -1217,7 +1213,7 @@ def graph_query():
         current_app.logger.error(f"Graph query error: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-@main.route('/api/graph/download/<path:filename>')
+@main.route('/graph/download/<path:filename>')
 def download_graph_file(filename):
     current_app.logger.info(f"[DOWNLOAD] Requested filename: '{filename}'")
     
@@ -1383,7 +1379,7 @@ def download_graph_file(filename):
         as_attachment=False  # Allow browser to preview the file
     )
 
-@main.route("/api/graph/render-clusters-merged", methods=["POST"])
+@main.route("/graph/render-clusters-merged", methods=["POST"])
 def render_semantic_cluster_merge():
     try:
         data = request.get_json()
@@ -1422,7 +1418,7 @@ def extract_main_labels_from_multiple(source_labels):
     return ", ".join(main_labels)
 
 
-@main.route("/api/graph/graph-cluster-list", methods=["GET"])
+@main.route("/graph/graph-cluster-list", methods=["GET"])
 def get_graph_and_clusters():
     try:
         storage = GraphPostgresStorage(dns)
@@ -1471,7 +1467,7 @@ def get_graph_and_clusters():
         current_app.logger.error(f"Error listing graph-cluster data: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-@main.route("/api/graph/<int:graph_id>/cluster-labels", methods=["GET"])
+@main.route("/graph/<int:graph_id>/cluster-labels", methods=["GET"])
 def get_cluster_labels(graph_id):
     try:
         conn = psycopg2.connect(dns)
@@ -1485,7 +1481,7 @@ def get_cluster_labels(graph_id):
         current_app.logger.error(f"Error fetching labels: {str(e)}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
-@main.route("/api/setenv", methods=["POST"])
+@main.route("/setenv", methods=["POST"])
 def set_env(key=None, value=None):
     try:
         if not key or not value:
@@ -1499,7 +1495,7 @@ def set_env(key=None, value=None):
     current_app.logger.info(f"Environment variable {key} set to {value}")
     return jsonify({"message": f"Environment variable {key} set to {value}"}), 200
 
-@main.route("/api/setenv", methods=["DELETE"])
+@main.route("/setenv", methods=["DELETE"])
 def delete_env(key=None):
     try:
         if not key:    
