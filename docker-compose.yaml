@@ -1,59 +1,59 @@
-name: idc-uat
+name: idc-uat_blue
 
 networks:
-  uat_network:
-    name: uat_network
+  uat_blue_network:
+    name: uat_blue_network
     driver: bridge
     external: true
 
 volumes:
-  uat_cache:
-  uat_vanna_chroma:
-  uat_profile_embedding:
-  uat_nltk_data:
-  uat_output:
-  uat_logs:
-  uat_ml_models:
-  uat_uploads:
-  uat_chromadb:
-  uat_whisper:
-  uat_paddleocr:
-  uat_chroma_model:
-  uat_graph_file_uploads:
-  uat_sql_uploads:
+  uat_blue_cache:
+  uat_blue_vanna_chroma:
+  uat_blue_profile_embedding:
+  uat_blue_nltk_data:
+  uat_blue_output:
+  uat_blue_logs:
+  uat_blue_ml_models:
+  uat_blue_uploads:
+  uat_blue_chromadb:
+  uat_blue_whisper:
+  uat_blue_paddleocr:
+  uat_blue_chroma_model:
+  uat_blue_graph_file_uploads:
+  uat_blue_sql_uploads:
 
 services:
   flask-app:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: uat-flask-app
+    container_name: uat_blue-flask-app
     restart: always
     ports:
-      - "5001:5000"  # Use different port from dev
+      - "5005:5000"  # Use different port from dev
     env_file:
       - .env
     environment:
       - FLASK_ENV=development
-      - CELERY_BROKER_URL=redis://uat-redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://uat-redis:6379/0
+      - CELERY_BROKER_URL=redis://uat_blue-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://uat_blue-redis:6379/0
     depends_on:
       - redis
     volumes:
-      - uat_cache:/myapp/cache
-      - uat_vanna_chroma:/myapp/cache/vanna-chroma
-      - uat_profile_embedding:/myapp/cache/profiling_embedding
-      - uat_logs:/myapp/cache/logs
-      - uat_sql_uploads:/myapp/cache/sql-uploads
-      - uat_graph_file_uploads:/myapp/cache/graph-file-uploads
-      - uat_ml_models:/myapp/cache/ml-model
-      - uat_uploads:/myapp/cache/uploads
-      - uat_chromadb:/myapp/cache/chromadb
-      - uat_chroma_model:/root/.cache/chroma
-      - uat_output:/myapp/cache/output
-      - uat_whisper:/root/.cache/whisper
-      - uat_paddleocr:/root/.paddleocr
-      - uat_nltk_data:/usr/share/nltk_data
+      - uat_blue_cache:/myapp/cache
+      - uat_blue_vanna_chroma:/myapp/cache/vanna-chroma
+      - uat_blue_profile_embedding:/myapp/cache/profiling_embedding
+      - uat_blue_logs:/myapp/cache/logs
+      - uat_blue_sql_uploads:/myapp/cache/sql-uploads
+      - uat_blue_graph_file_uploads:/myapp/cache/graph-file-uploads
+      - uat_blue_ml_models:/myapp/cache/ml-model
+      - uat_blue_uploads:/myapp/cache/uploads
+      - uat_blue_chromadb:/myapp/cache/chromadb
+      - uat_blue_chroma_model:/root/.cache/chroma
+      - uat_blue_output:/myapp/cache/output
+      - uat_blue_whisper:/root/.cache/whisper
+      - uat_blue_paddleocr:/root/.paddleocr
+      - uat_blue_nltk_data:/usr/share/nltk_data
 
 
     deploy:
@@ -64,38 +64,38 @@ services:
               count: 1
               capabilities: [gpu]
     networks:
-      - uat_network
+      - uat_blue_network
 
   celery-worker:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: uat-celery-worker
+    container_name: uat_blue-celery-worker
     restart: always
     command: celery -A celery_worker.celery worker --autoscale=10,2 --loglevel=info -Q cpu_queue
     env_file:
       - .env
     environment:
       - FLASK_ENV=production
-      - CELERY_BROKER_URL=redis://uat-redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://uat-redis:6379/0
+      - CELERY_BROKER_URL=redis://uat_blue-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://uat_blue-redis:6379/0
     depends_on:
       - redis
     volumes:
-      - uat_cache:/myapp/cache
-      - uat_vanna_chroma:/myapp/cache/vanna-chroma
-      - uat_profile_embedding:/myapp/cache/profiling_embedding
-      - uat_logs:/myapp/cache/logs
-      - uat_output:/myapp/cache/output
-      - uat_sql_uploads:/myapp/cache/sql-uploads
-      - uat_graph_file_uploads:/myapp/cache/graph-file-uploads
-      - uat_ml_models:/myapp/cache/ml-model
-      - uat_uploads:/myapp/cache/uploads
-      - uat_chromadb:/myapp/cache/chromadb
-      - uat_whisper:/root/.cache/whisper
-      - uat_paddleocr:/root/.paddleocr
-      - uat_nltk_data:/usr/share/nltk_data
-      - uat_chroma_model:/root/.cache/chroma
+      - uat_blue_cache:/myapp/cache
+      - uat_blue_vanna_chroma:/myapp/cache/vanna-chroma
+      - uat_blue_profile_embedding:/myapp/cache/profiling_embedding
+      - uat_blue_logs:/myapp/cache/logs
+      - uat_blue_output:/myapp/cache/output
+      - uat_blue_sql_uploads:/myapp/cache/sql-uploads
+      - uat_blue_graph_file_uploads:/myapp/cache/graph-file-uploads
+      - uat_blue_ml_models:/myapp/cache/ml-model
+      - uat_blue_uploads:/myapp/cache/uploads
+      - uat_blue_chromadb:/myapp/cache/chromadb
+      - uat_blue_whisper:/root/.cache/whisper
+      - uat_blue_paddleocr:/root/.paddleocr
+      - uat_blue_nltk_data:/usr/share/nltk_data
+      - uat_blue_chroma_model:/root/.cache/chroma
 
 
     deploy:
@@ -106,38 +106,38 @@ services:
               count: 1
               capabilities: [gpu]
     networks:
-      - uat_network
+      - uat_blue_network
 
   celery-worker-gpu:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: uat-celery-worker-gpu
+    container_name: uat_blue-celery-worker-gpu
     restart: always
     command: celery -A celery_worker.celery worker --pool=solo --loglevel=info -Q gpu_queue
     env_file:
       - .env
     environment:
       - FLASK_ENV=production
-      - CELERY_BROKER_URL=redis://uat-redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://uat-redis:6379/0
+      - CELERY_BROKER_URL=redis://uat_blue-redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://uat_blue-redis:6379/0
     depends_on:
       - redis
     volumes:
-      - uat_cache:/myapp/cache
-      - uat_vanna_chroma:/myapp/cache/vanna-chroma
-      - uat_profile_embedding:/myapp/cache/profiling_embedding
-      - uat_logs:/myapp/cache/logs
-      - uat_output:/myapp/cache/output
-      - uat_sql_uploads:/myapp/cache/sql-uploads
-      - uat_graph_file_uploads:/myapp/cache/graph-file-uploads
-      - uat_ml_models:/myapp/cache/ml-model
-      - uat_uploads:/myapp/cache/uploads
-      - uat_chromadb:/myapp/cache/chromadb
-      - uat_whisper:/root/.cache/whisper
-      - uat_paddleocr:/root/.paddleocr
-      - uat_nltk_data:/usr/share/nltk_data
-      - uat_chroma_model:/root/.cache/chroma
+      - uat_blue_cache:/myapp/cache
+      - uat_blue_vanna_chroma:/myapp/cache/vanna-chroma
+      - uat_blue_profile_embedding:/myapp/cache/profiling_embedding
+      - uat_blue_logs:/myapp/cache/logs
+      - uat_blue_output:/myapp/cache/output
+      - uat_blue_sql_uploads:/myapp/cache/sql-uploads
+      - uat_blue_graph_file_uploads:/myapp/cache/graph-file-uploads
+      - uat_blue_ml_models:/myapp/cache/ml-model
+      - uat_blue_uploads:/myapp/cache/uploads
+      - uat_blue_chromadb:/myapp/cache/chromadb
+      - uat_blue_whisper:/root/.cache/whisper
+      - uat_blue_paddleocr:/root/.paddleocr
+      - uat_blue_nltk_data:/usr/share/nltk_data
+      - uat_blue_chroma_model:/root/.cache/chroma
 
     deploy:
       resources:
@@ -147,13 +147,13 @@ services:
               count: 1
               capabilities: [gpu]
     networks:
-      - uat_network
+      - uat_blue_network
 
   redis:
     image: "redislabs/redisgraph:latest"
-    container_name: uat-redis
+    container_name: uat_blue-redis
     ports:
-      - "6380:6379"  # Use a different Redis port from dev
+      - "6388:6379"  # Use a different Redis port from dev
     restart: always
     networks:
-      - uat_network
+      - uat_blue_network
