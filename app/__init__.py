@@ -1,9 +1,16 @@
+import sys
 import logging
 from logging.handlers import RotatingFileHandler
 from dotenv import load_dotenv
 from flask import Flask
 from celery import Celery, Task
 import logging
+
+# Fix for transformers library calling sys.stdout.isatty() on filtered streams
+if not hasattr(sys.stdout, 'isatty'):
+    sys.stdout.isatty = lambda: False
+if not hasattr(sys.stderr, 'isatty'):
+    sys.stderr.isatty = lambda: False
 
 from sentence_transformers import SentenceTransformer
 
@@ -76,3 +83,11 @@ def configure_logging(app: Flask):
     app.logger.addHandler(console_handler)
 
     app.logger.setLevel(logging.INFO)  # Log level for the app
+
+    # Suppress noisy polling endpoints from Werkzeug request log
+    class SuppressPollingFilter(logging.Filter):
+        def filter(self, record):
+            msg = record.getMessage()
+            return "rag2EvalApi" not in msg
+
+    logging.getLogger('werkzeug').addFilter(SuppressPollingFilter())

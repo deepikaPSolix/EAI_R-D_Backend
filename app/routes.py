@@ -55,11 +55,11 @@ from app.db_utils import open_db_connection
 
 doc_updates = 0
 main = Blueprint('main', __name__)
-dns_host = os.getenv("DNS_HOST")
-dns_dbname = os.getenv("DNS_DBNAME")
-dns_user = os.getenv("DNS_USER")
-dns_password = os.getenv("DNS_PASSWORD")
-dns_port = os.getenv("DNS_PORT")
+dns_host = os.getenv("DNS_HOST") or os.getenv("DB_HOST")
+dns_dbname = os.getenv("DNS_DBNAME") or os.getenv("DB_NAME")
+dns_user = os.getenv("DNS_USER") or os.getenv("DB_USER")
+dns_password = os.getenv("DNS_PASSWORD") or os.getenv("DB_PASSWORD")
+dns_port = os.getenv("DNS_PORT") or os.getenv("DB_PORT", "5432")
 dns = f"host={dns_host} dbname={dns_dbname} user={dns_user} password={dns_password} port={dns_port}"
 
 @main.route("/")
@@ -753,7 +753,7 @@ def query_rag2():
         
         if(data["lida"] == True):
             dash = Dashboard()
-            path=dash.generate_csv_from_response(response=res, model_source="together")
+            path=dash.generate_csv_from_response(response=res, model_source="openai")
             openai_api_key = os.getenv("OPENAI_API_KEY")
             chart_link=dash.run_lida_on_csv(path, user_query= curated_query+", represent in "+data["graph_type"] + "chart ", api_key=openai_api_key)
             

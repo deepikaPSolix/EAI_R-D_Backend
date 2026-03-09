@@ -7,11 +7,11 @@ from app.hitl_data_processing import compare_and_update_postgres
 #Postgres
 from app.postgres_db import DatabaseManager
 import os
-dns_host = os.getenv("DNS_HOST")
-dns_dbname = os.getenv("DNS_DBNAME")
-dns_user = os.getenv("DNS_USER")
-dns_password = os.getenv("DNS_PASSWORD")
-dns_port = os.getenv("DNS_PORT")
+dns_host = os.getenv("DNS_HOST") or os.getenv("DB_HOST")
+dns_dbname = os.getenv("DNS_DBNAME") or os.getenv("DB_NAME")
+dns_user = os.getenv("DNS_USER") or os.getenv("DB_USER")
+dns_password = os.getenv("DNS_PASSWORD") or os.getenv("DB_PASSWORD")
+dns_port = os.getenv("DNS_PORT") or os.getenv("DB_PORT", "5432")
 dns = f"host={dns_host} dbname={dns_dbname} user={dns_user} password={dns_password} port={dns_port}"
 def parse_retention(rt_str):
     """

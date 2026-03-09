@@ -10,7 +10,7 @@ import re
 import json
 
 class LLMModel:
-    def __init__(self, model_source: str = "together", json_mode: bool = False):
+    def __init__(self, model_source: str = "openai", json_mode: bool = False):
         self.model_source = model_source
         self.json_mode = json_mode
         self.model = self._initialize_model()
@@ -39,9 +39,15 @@ class LLMModel:
                 model="gpt-4.1",
                 openai_api_key=os.getenv("OPENAI_API_KEY"),
             )
+        elif self.model_source == "gpt4o_mini":
+            return ChatOpenAI(
+                temperature=0.0,
+                model="gpt-4o-mini",
+                openai_api_key=os.getenv("OPENAI_API_KEY"),
+            )
         elif self.model_source == "qwen":
             return ChatTogether(
-                temperature=0.1, 
+                temperature=0.1,
                 model='Qwen/Qwen2.5-Coder-32B-Instruct'
              )
         elif self.model_source == "llama4":

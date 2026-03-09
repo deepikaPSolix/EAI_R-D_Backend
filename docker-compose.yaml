@@ -30,7 +30,7 @@ services:
     container_name: uat-flask-app
     restart: always
     ports:
-      - "5001:5000"  # Use different port from dev
+      - "5004:5000"  # Use different port from dev
     env_file:
       - .env
     environment:
@@ -153,7 +153,7 @@ services:
     image: "redislabs/redisgraph:latest"
     container_name: uat-redis
     ports:
-      - "6380:6379"  # Use a different Redis port from dev
+      - "6383:6379"  # Use a different Redis port from dev
     restart: always
     networks:
       - uat_network

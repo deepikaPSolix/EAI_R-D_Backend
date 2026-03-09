@@ -18,6 +18,16 @@ class AttributesModel(BaseModel):
     data_classifiers: List[str] = Field(default_factory=list, description="List of 1 to 5 distinct, meaningful data types present in the document (e.g., PII, EHR), excluding basic types like name, age, address.")
     retention_time: str = Field("", description="The retention period for this document, specified in years and months based on the document type.")
     attributes: Dict[Any, Any] = Field(default_factory=dict, description="Relevant data and attributes from the given text as key-value pairs.")
+    
+    # RCC-specific fields (only populated if document is an RCC definition)
+    is_rcc_document: bool = Field(False, description="True if this is a Record Class Code definition document")
+    record_class_code: str = Field("", description="The Record Class Code (e.g., ADM150, LEG120)")
+    record_class_name: str = Field("", description="The full name of the Record Class (e.g., Internal Tracking/Monitoring)")
+    jurisdiction: str = Field("", description="Jurisdiction where this RCC applies (e.g., US, EU)")
+    retention_event: str = Field("", description="Description of when the retention period begins")
+    record_type_examples: List[str] = Field(default_factory=list, description="List of specific record types covered by this RCC")
+    related_record_classes: List[str] = Field(default_factory=list, description="Related RCC codes that may be referenced")
+    trigger_column_patterns: List[str] = Field(default_factory=list, description="Column name patterns to look for based on retention event (e.g., CreatedDate, StartDate)")
 
     model_config = ConfigDict(frozen=False, validate_default = False, extra = "allow")
 

@@ -1,5 +1,5 @@
 langchain>=0.3.7
-unstructured>=0.18.21
+unstructured[pdf]>=0.18.21
 pandas>=2.3.0
 numpy>=1.26.0
 scikit-learn>=1.8.0

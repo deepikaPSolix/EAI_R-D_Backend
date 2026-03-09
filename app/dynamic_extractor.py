@@ -50,13 +50,35 @@ class DynamicExtractor:
         attributes_list = [a.attributes for a in extracted_data]
         attributes = self._merge_json_objects(attributes_list)
 
-        return AttributesModel(
-            sensitivity=sensitivity,
-            responsible_values=responsible_values,
-            retention_time=retention_time,
-            data_classifiers=unique_classifiers,
-            attributes=attributes
-        )
+        # 🔍 NEW: Check if ANY chunk detected this as an RCC document
+        rcc_obj = next((attr for attr in extracted_data if attr.is_rcc_document), None)
+        
+        if rcc_obj:
+            # If RCC detected, preserve ALL RCC-specific fields
+            return AttributesModel(
+                sensitivity=sensitivity,
+                responsible_values=responsible_values,
+                retention_time=rcc_obj.retention_time,  # Use RCC retention time if available
+                data_classifiers=unique_classifiers,
+                attributes=attributes,
+                is_rcc_document=True,
+                record_class_code=rcc_obj.record_class_code,
+                record_class_name=rcc_obj.record_class_name,
+                jurisdiction=rcc_obj.jurisdiction,
+                retention_event=rcc_obj.retention_event,
+                record_type_examples=rcc_obj.record_type_examples,
+                related_record_classes=rcc_obj.related_record_classes,
+                trigger_column_patterns=rcc_obj.trigger_column_patterns
+            )
+        else:
+            # Regular document (not RCC)
+            return AttributesModel(
+                sensitivity=sensitivity,
+                responsible_values=responsible_values,
+                retention_time=retention_time,
+                data_classifiers=unique_classifiers,
+                attributes=attributes
+            )
 
     def _merge_json_objects(self, json_objects: dict):
         # Initialize an empty dictionary to hold the final merged JSON object
@@ -97,9 +119,20 @@ class DynamicExtractor:
 
     def _extraction_query(self, data):
         return f'''
-            Task: Text data Analysis
+            Task: Text data Analysis and RCC Detection
 
             You are provided with text from a file. Perform the following tasks accurately:
+
+            **FIRST**: Determine if this is a Record Class Code (RCC) Definition Document
+            - Check if the text contains ALL of these required fields (in ANY format - with or without colons):
+              * "Record Class Code" (with or without ':') followed by or on the next line containing a code like ADM150, LEG120, etc.
+              * "Record Class Name" (with or without ':') followed by or on the next line containing the name
+              * "Retention Period" (with or without ':') followed by or on the next line containing a duration
+            - If ALL three fields are present ANYWHERE in the document, set is_rcc_document=true and extract RCC-specific fields (see below)
+            - If ANY are missing, set is_rcc_document=false and skip RCC fields
+            - IMPORTANT: Be flexible with formatting - labels may be on separate lines from values, in tables, or in various layouts
+
+            **FOR ALL DOCUMENTS** (RCC or not), extract:
 
             1. **Sensitivity Classification**: For the given text, assign a sensitivity level (integer) based on the following categories:
             - 1: Public Data (e.g., public reports, statistics)
@@ -115,49 +148,38 @@ class DynamicExtractor:
             2. **Responsible data types**: Analyze the text and identify 3 to 5 **distinct** and meaningful data types that justify the sensitivity classification. Do not rely on the example data types provided below—these are only for reference. The identified data types must be directly related to the actual content of the chunk. The data types should be relevant to the chunk's content, and similar types must not be repeated.
 
             Reference examples (for understanding only, do not use as output unless relevant):
-                - PII
-                - PHI
-                - EHR Data
-                - Medical History
-                - Lab Results
-                - Prescription Data
-                - Patient Satisfaction Surveys
-                - Appointment Records
-                - Demographic Information
-                - Contact Information
-                - Health Insurance Details
-                - Caregiver Information
-                - Clinical Trial Data
-                - Adverse Event Reports
-                - Imaging Data
-                - Genetic Information
-                - Diagnosis Codes (ICD-10)
-                - Treatment Protocols
-                - Medical Devices Information
-                - Immunization Records
-                - Clinical Notes
-                - Anonymized Clinical Notes
-                - Research Findings
-                - Billing Information
-                - Insurance Claims Data
-                - Compliance Reports
-                - Audit Trails
-                - Internal Policies
-                - Staff Scheduling Information
-                - Facility Management Data
-                - Equipment Inventory
-                - Financial Reports
-                - Strategic Plans
-                - Billing Disputes
-                - Operational Efficiency Metrics
-                - Staffing Levels
+                - PII, PHI, EHR Data, Medical History, Lab Results, Prescription Data
+                - Patient Satisfaction Surveys, Appointment Records, Demographic Information
+                - Contact Information, Health Insurance Details, Caregiver Information
+                - Clinical Trial Data, Adverse Event Reports, Imaging Data, Genetic Information
+                - Diagnosis Codes (ICD-10), Treatment Protocols, Medical Devices Information
+                - Immunization Records, Clinical Notes, Anonymized Clinical Notes
+                - Research Findings, Billing Information, Insurance Claims Data
+                - Compliance Reports, Audit Trails, Internal Policies
+                - Staff Scheduling Information, Facility Management Data
+                - Equipment Inventory, Financial Reports, Strategic Plans
+                - Billing Disputes, Operational Efficiency Metrics, Staffing Levels
                 - Risk Management Reports
 
             3. **Data Points**: Provide up to 10 keys that contribute to the sensitivity level.
 
             4. **Retention Period**: Assign a retention period for the data in the text based on its type, specifying the time in years and months.
 
-
+            5. **RCC Detection (only if applicable)**:
+            - Determine if the text is a "Record Class Code (RCC) definition document".
+            - If YES, set `is_rcc_document=true` and extract:
+            - record_class_code (e.g., ADM150): check for RECORD CLASS CODE label
+            - record_class_name :check for RECORD CLASS NAME label
+            - jurisdiction (if present) :check for JURISDICTION label
+            - retention_event (exact sentence if present) :check for RETENTION EVENT label
+            - record_type_examples (bullet list)
+            - related_record_classes (list of RCC codes mentioned)
+            - trigger_column_patterns (list of column-name variations implied by the retention event; if not mentioned, leave empty)
+            - If NO, set `is_rcc_document=false` and leave all RCC fields blank/empty.
+        Important:
+        - Do not guess RCC values.
+        - Only fill RCC fields when the text clearly contains them.
+        - If uncertain, leave blank.
             Return the output strictly in the required JSON format, without any additional information i.e *NO PREFIX AND SUFFIX*.
 
             File text:

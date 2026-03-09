@@ -19,7 +19,7 @@ import huggingface_hub as hf
 hf.cached_download = hf.hf_hub_download 
 
 class Dashboard:
-    def generate_csv_from_response(self, response, model_source="together"):
+    def generate_csv_from_response(self, response, model_source="openai"):
        
         # Use LLM to convert response into CSV format
         llm_model = LLMModel(model_source).model

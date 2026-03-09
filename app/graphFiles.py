@@ -29,11 +29,11 @@ import spacy
 from nltk.corpus import stopwords
 from pathlib import Path
 
-dns_host = os.getenv("DNS_HOST")
-dns_dbname = os.getenv("DNS_DBNAME")
-dns_user = os.getenv("DNS_USER")
-dns_password = os.getenv("DNS_PASSWORD")
-dns_port = os.getenv("DNS_PORT")
+dns_host = os.getenv("DNS_HOST") or os.getenv("DB_HOST")
+dns_dbname = os.getenv("DNS_DBNAME") or os.getenv("DB_NAME")
+dns_user = os.getenv("DNS_USER") or os.getenv("DB_USER")
+dns_password = os.getenv("DNS_PASSWORD") or os.getenv("DB_PASSWORD")
+dns_port = os.getenv("DNS_PORT") or os.getenv("DB_PORT", "5432")
 dns = f"host={dns_host} dbname={dns_dbname} user={dns_user} password={dns_password} port={dns_port}"
 nlp = spacy.load("en_core_web_sm")
 try:
@@ -96,18 +96,11 @@ def deduplicate_chunks(chunks, prioritize_graph=True):
 
 class GraphFiles():
     def __init__(self):
-        # Use global/shared SentenceTransformer instance for performance
-        # Lazy, per-process model init to avoid CUDA in forked children
-        import torch
-        
+        # Reuse the global SentenceTransformer from app/__init__.py to save GPU memory
+        from app import st_model as _global_st
+        self.st_model = _global_st
 
-        if not hasattr(self, "_st_model") or self._st_model is None:
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            # choose your model; keep it small unless you really need bigger
-            self._st_model = SentenceTransformer("all-MiniLM-L6-v2", device=device)
-        self.st_model = self._st_model
-
-        self.llm = LLMModel.from_together()
+        self.llm = LLMModel.from_openai()
         self.all_chunks=None
         self.all_embeddings = None        
         self.session_id = str(uuid.uuid4())[:8]  # Generate a unique session ID        # Initialize ChromaDB client for graph chunks

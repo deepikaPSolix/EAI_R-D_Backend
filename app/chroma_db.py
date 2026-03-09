@@ -40,20 +40,37 @@ class ChromaDB:
                 doc_attributes = row['attributes']['attributes']
                 doc_attributes["file_type"] = row['file_type']
 
-                metadatas.append(
-                     {
-                        'label':doc_label,
-                        'sensitivity':doc_sensitivity,
-                        'data_classifiers': ", ".join(row['attributes']['data_classifiers']),
-                        'responsible_values': ", ".join(row['attributes']['responsible_values']),
-                        'file_name': doc_name,
-                        'retention_time': row['attributes']['retention_time'],
-                        'attributes':json.dumps(doc_attributes),
-                        'file_size': row['file_size'],
-                        'created_at': row['created_at'],
-                        'word_count': row['word_count']
-                    }
-                )
+                metadata = {
+                    'label':doc_label,
+                    'sensitivity':doc_sensitivity,
+                    'data_classifiers': ", ".join(row['attributes']['data_classifiers']),
+                    'responsible_values': ", ".join(row['attributes']['responsible_values']),
+                    'file_name': doc_name,
+                    'retention_time': row['attributes']['retention_time'],
+                    'attributes':json.dumps(doc_attributes),
+                    'file_size': row['file_size'],
+                    'created_at': row['created_at'],
+                    'word_count': row['word_count']
+                }
+                
+                # Add Excel RCC data if available
+                if 'rcc_result' in row and row['rcc_result']:
+                    metadata['has_rcc_matches'] = True
+                    metadata['rcc_result'] = json.dumps(row['rcc_result'])
+                    metadata['matched_tables_count'] = len(row['rcc_result'])
+                    metadata['total_tables_count'] = len(row['rcc_result'])  # For now, assume all tables are processed
+                else:
+                    metadata['has_rcc_matches'] = False
+                    metadata['rcc_result'] = json.dumps([])
+                
+                # Keep backward compatibility with excel_rcc_data if it exists
+                if 'excel_rcc_data' in row and row['excel_rcc_data'] and isinstance(row['excel_rcc_data'], dict):
+                    metadata['has_rcc_matches'] = row['excel_rcc_data'].get('has_rcc_matches', False)
+                    metadata['excel_rcc_assignments'] = json.dumps(row['excel_rcc_data'].get('table_rcc_assignments', []))
+                    metadata['matched_tables_count'] = row['excel_rcc_data'].get('matched_tables', 0)
+                    metadata['total_tables_count'] = row['excel_rcc_data'].get('total_tables', 0)
+                
+                metadatas.append(metadata)
             
             self.collection.add(documents= documents, ids= ids, metadatas= metadatas)
             #Postgres DB
@@ -95,9 +112,10 @@ class ChromaDB:
                 try:
                     db_manager=DatabaseManager()
                     db_manager.add_file_metadata(file_metadata_result)
-                    db_manager.add_file_metadata_classification(file_metadata_classification_result)                    
+                    db_manager.add_file_metadata_classification(file_metadata_classification_result)
+                    current_app.logger.info(f"✅ Inserted metadata for file: {data['file_name']}")
                 except Exception as e:
-                    current_app.logger.error(f"Error in add_file_metadata: {e}")            
+                    current_app.logger.error(f"❌ Error inserting metadata for file '{data['file_name']}': {str(e)}", exc_info=True)            
             
             return True
         except Exception as e:
@@ -161,6 +179,18 @@ class ChromaDB:
                     'attributes' : json.loads(result['metadatas'][ele]['attributes']),
                     'word_count': result['metadatas'][ele].get('word_count', 0)
                 }
+                
+                # Add Excel RCC data if available
+                if result['metadatas'][ele].get('has_rcc_matches'):
+                    data_dict['has_rcc_matches'] = True
+                    data_dict['rcc_result'] = json.loads(result['metadatas'][ele].get('rcc_result', '[]'))
+                    data_dict['matched_tables_count'] = result['metadatas'][ele].get('matched_tables_count', 0)
+                    data_dict['total_tables_count'] = result['metadatas'][ele].get('total_tables_count', 0)
+                    
+                    # Keep backward compatibility
+                    if 'excel_rcc_assignments' in result['metadatas'][ele]:
+                        data_dict['excel_rcc_assignments'] = json.loads(result['metadatas'][ele].get('excel_rcc_assignments', '[]'))
+                
                 data.append(data_dict)
             return data
         except Exception as e:

@@ -1,3 +1,4 @@
+# tasks.py:
 from datetime import datetime
 import json
 import os
@@ -15,10 +16,46 @@ from app.ragEvaluation import ragEval
 from app.ragEvaluationScreenTwo import TextAnalysis
 import app.utils as utils
 from celery.exceptions import MaxRetriesExceededError
+from app.rcc_engine import RCCEngine
 
 #Postgres
 from app.postgres_db import DatabaseManager
 import os
+import ast
+
+def parse_attributes_cell(raw_attr, file_name=""):
+    """
+    Parses the 'attributes' column read back from CSV.
+    Handles:
+      - dict already
+      - JSON string
+      - python-literal dict string (single quotes) from pandas/csv
+    Returns: dict or None
+    """
+    if raw_attr is None:
+        return None
+    if isinstance(raw_attr, dict):
+        return raw_attr
+
+    if not isinstance(raw_attr, str) or not raw_attr.strip():
+        return None
+
+    # 1) Try JSON
+    try:
+        return json.loads(raw_attr)
+    except Exception:
+        pass
+
+    # 2) Try python literal (safe)
+    try:
+        val = ast.literal_eval(raw_attr)
+        return val if isinstance(val, dict) else None
+    except Exception as e:
+        current_app.logger.error(
+            f"parse_attributes_cell: failed for {file_name}: {e}. Raw snippet: {raw_attr[:300]}"
+        )
+        return None
+
 
 def process_file_workflow(files: list):
     files_group = []
@@ -60,6 +97,8 @@ def process_file_workflow(files: list):
 @shared_task(bind=True, max_retries=3, retry_backoff=False)
 def generate_labels(self, data: list):
     try:
+        rcc_engine = RCCEngine()
+        data = rcc_engine.attach_rcc_results(data)
         current_app.logger.info(f"Initialised generate_labels")
         if not isinstance(data, list):
             data = [data]
@@ -150,7 +189,7 @@ def parse_file(self, file_path: str):
             chunks = generic_processor.process_file(file_path)
 
         
-
+        rcc_result = None
         attr_ext = DynamicExtractor()
         attr_res = attr_ext.extract_from_file(chunks)
         current_app.logger.info(f"Extracted attributes from file. {attr_res.model_dump()}")
@@ -160,12 +199,14 @@ def parse_file(self, file_path: str):
             'file_name' : file_name, 
             'file_size': file_size, 
             'file_type' : file_type, 
+            'file_path': file_path,  
             'chunks': [chunk.text for chunk in chunks], 
             'data' : " | ".join([chunk.text for chunk in chunks]), 
             'attributes' : attr_res.model_dump(), 
             "status": "success", 
             'created_at': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "word_count": word_count
+            "word_count": word_count,
+            'rcc_result': rcc_result, 
         }
     except Exception as e:
         current_app.logger.error(str(e))
@@ -264,9 +305,46 @@ def cleanup():
 # Evaluation
 #=============================================
 
+# @shared_task
+# def fileAttributesEvaluationFunction():
+
+#     file_name='./cache/result.csv'
+#     df=pd.read_csv(file_name)
+
+#     columnsToRead=['file_name','attributes', 'data']
+#     dataD=df[columnsToRead]
+
+#     for index, row in dataD.iterrows():
+#         # print(i['file_name'])
+#         # print(i['attributes'])
+
+#         backup_directory = os.path.join(os.getcwd(), current_app.config['UPLOAD_DIR_PATH'], row['file_name'])
+#         content=row['data']
+#         # if os.path.isfile(backup_directory):
+#         #     with open(backup_directory,'r') as file:
+#         #         content=file.read()
+#         #         # print(" the contents of the file")
+#         #         # print(content)
+            
+#         if not content=='':
+#             query_input='''
+#             Extract attributes described in the output format from the text below.
+#             - If you can't find an attribute, just leave it blank. Do not put null.
+#             - If there are multiple values for the same attribute, select the most relevant one based on the context provided.
+#             - Make sure to check is the text is medical data.
+#             '''
+#             output=json.loads(row['attributes'].replace("'", '"'))['attributes']
+#             context=content
+#             combined_data=[query_input,output,context]
+#             time.sleep(3)
+#             evaluationFunction.delay(combinedList=combined_data,include_relevance=False,include_hallucination=True,include_moderation=False,evaluation_result_file="fileAttributesResult.json",evaluation_result_csv="fileAttributesResult.csv",fileName=row['file_name'])
+
+
+#     return "Done with fileAttributesEvaluationFunction!!! "
+        
+
 @shared_task
 def fileAttributesEvaluationFunction():
-
     file_name='./cache/result.csv'
     df=pd.read_csv(file_name)
 
@@ -274,33 +352,40 @@ def fileAttributesEvaluationFunction():
     dataD=df[columnsToRead]
 
     for index, row in dataD.iterrows():
-        # print(i['file_name'])
-        # print(i['attributes'])
+        content = row.get('data', '')
+        if not content:
+            continue
 
-        backup_directory = os.path.join(os.getcwd(), current_app.config['UPLOAD_DIR_PATH'], row['file_name'])
-        content=row['data']
-        # if os.path.isfile(backup_directory):
-        #     with open(backup_directory,'r') as file:
-        #         content=file.read()
-        #         # print(" the contents of the file")
-        #         # print(content)
-            
-        if not content=='':
-            query_input='''
-            Extract attributes described in the output format from the text below.
-            - If you can't find an attribute, just leave it blank. Do not put null.
-            - If there are multiple values for the same attribute, select the most relevant one based on the context provided.
-            - Make sure to check is the text is medical data.
-            '''
-            output=json.loads(row['attributes'].replace("'", '"'))['attributes']
-            context=content
-            combined_data=[query_input,output,context]
-            time.sleep(3)
-            evaluationFunction.delay(combinedList=combined_data,include_relevance=False,include_hallucination=True,include_moderation=False,evaluation_result_file="fileAttributesResult.json",evaluation_result_csv="fileAttributesResult.csv",fileName=row['file_name'])
+        attrs = parse_attributes_cell(row['attributes'], file_name=row['file_name'])
+        if not attrs:
+            continue
 
+        # what your model extracted inside AttributesModel
+        extracted_attributes = attrs.get('attributes', {})  # <-- THIS is the key fix
+
+        query_input = '''
+        Extract attributes described in the output format from the text below.
+        - If you can't find an attribute, just leave it blank. Do not put null.
+        - If there are multiple values for the same attribute, select the most relevant one based on the context provided.
+        - Make sure to check is the text is medical data.
+        '''
+
+        combined_data=[query_input, extracted_attributes, content]
+        time.sleep(3)
+
+        evaluationFunction.delay(
+            combinedList=combined_data,
+            include_relevance=False,
+            include_hallucination=True,
+            include_moderation=False,
+            evaluation_result_file="fileAttributesResult.json",
+            evaluation_result_csv="fileAttributesResult.csv",
+            fileName=row['file_name']
+        )
 
     return "Done with fileAttributesEvaluationFunction!!! "
-        
+
+
 
 @shared_task
 def fileClusterEvaluationFunction():
@@ -344,14 +429,13 @@ def fileSensitivityEvalutionFunction():
 
     selectedCols=df[columnsToRead]
     #sensitivityCol=df[['sensitivity']]
-
+    
     for index, row in selectedCols.iterrows():
-        # backup_directory = os.path.join(os.getcwd(), './cache/backup_folder', row['file_name'])
-        # content=''
-        # if os.path.isfile(backup_directory):
-        #     with open(backup_directory,'r') as file:
-        #         content=file.read()
-        attributes = json.loads(row['attributes'].replace("'", '"'))
+        attrs = parse_attributes_cell(row['attributes'], file_name=row['file_name'])
+        if not attrs:
+            continue
+
+        content = row.get('data', '')   
         content = row['data']
         inputPrompt='''What is the Sensivitiy level for this document or cluster:
             Here are the details just for your information
@@ -367,7 +451,7 @@ def fileSensitivityEvalutionFunction():
             Ensure documents containing PII, trade secrets, legal, medical, or intellectual property are classified as level 3 or higher. Assign levels 6 or 7 for critical or regulatory data.
 
             '''
-        outputRow=attributes['sensitivity']
+        outputRow = attrs.get('sensitivity')
 
         context=content
         combinedList=[inputPrompt,outputRow,context]
@@ -547,7 +631,7 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
             db.add_query_response(query_response_data)
             current_app.logger.info("Query response evaluation inserted into PostgreSQL.")
         except Exception as e:
-            current_app.logger.info("Error inserting query response evaluation into PostgreSQL:", e)
+            current_app.logger.error("Error inserting query response evaluation into PostgreSQL: %s", str(e))
 
     # Branch 2: Cluster Evaluation – use the evaluation result filename to decide if this is a cluster evaluation
     elif evaluation_result_file == "fileClusterResult.json":
@@ -577,7 +661,7 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
             db.add_cluster(cluster_data)
             current_app.logger.info("Cluster evaluation inserted/updated into PostgreSQL.")
         except Exception as e:
-            current_app.logger.info("Error inserting cluster evaluation into PostgreSQL:", e)
+            current_app.logger.error("Error inserting cluster evaluation into PostgreSQL: %s", str(e))
 
     # Branch 3: Standard File Evaluation
     else:
@@ -596,7 +680,7 @@ def evaluationFunction(combinedList,include_relevance=True, include_hallucinatio
             db.add_file_evaluation(file_evaluation_data)
             current_app.logger.info("File evaluation inserted/updated into PostgreSQL.")
         except Exception as e:
-            current_app.logger.info("Error inserting file evaluation into PostgreSQL:", e)
+            current_app.logger.error("Error inserting file evaluation into PostgreSQL: %s", str(e))
 
 
 
@@ -761,7 +845,7 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
             db.add_query_response(query_response_data)
             current_app.logger.info("Screen 2 evaluation record for GPT inserted into PostgreSQL.")
         except Exception as e:
-            current_app.logger.info("Error inserting Screen 2 evaluation record for GPT:", e)
+            current_app.logger.error("Error inserting Screen 2 evaluation record for GPT: %s", str(e))
         # -------- End of New Section --------          
 
         return f"Done with Screen 2 Evaluation function! Results saved to {evaluation_result_file}."
@@ -769,3 +853,45 @@ def screen2EvaluationFunction(combinedList, evaluation_result_file="queryEvaluat
     except Exception as e:
         print(f"Error in Screen 2 Evaluation Function: {e}")
         return f"Error in Screen 2 Evaluation Function: {str(e)}"
+
+
+
+import sys
+import importlib.util
+
+
+@shared_task(bind=True)
+def extract_tables_from_images(self, input_dir=None, output_dir=None):
+    """
+    Celery task to run imgtotable's table extraction on all images in the input_dir.
+    """
+    # Default to cache/imgtotable_input and cache/imgtotable_output
+    if input_dir is None:
+        input_dir = str(Path(__file__).parent.parent / 'cache' / 'imgtotable_input')
+    if output_dir is None:
+        output_dir = str(Path(__file__).parent.parent / 'cache' / 'imgtotable_output')
+
+    # Dynamically import run_ppstructure.py as a module
+    imgtotable_path = Path(__file__).parent.parent / 'imgtotable' / 'run_ppstructure.py'
+    spec = importlib.util.spec_from_file_location('run_ppstructure', str(imgtotable_path))
+    run_ppstructure = importlib.util.module_from_spec(spec)
+    sys.modules['run_ppstructure'] = run_ppstructure
+    spec.loader.exec_module(run_ppstructure)
+
+    # Call the main logic as a function
+    class Args:
+        def __init__(self, input_dir, out):
+            self.input_dir = input_dir
+            self.out = out
+    args = Args(input_dir, output_dir)
+    # Patch argparse in the module
+    import argparse
+    orig_parse_args = argparse.ArgumentParser.parse_args
+    def fake_parse_args(self, *a, **kw):
+        return args
+    argparse.ArgumentParser.parse_args = fake_parse_args
+    try:
+        run_ppstructure.main()
+    finally:
+        argparse.ArgumentParser.parse_args = orig_parse_args
+    return {'status': 'completed', 'input_dir': input_dir, 'output_dir': output_dir}
