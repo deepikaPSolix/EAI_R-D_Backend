@@ -11,12 +11,10 @@ import logging
 
 # Use our OpenAI LLMModel instance
 # CrewAI supports LangChain models directly, which is what our LLMModel.from_openai() returns
-openai_model = LLMModel.from_openai()
 
 # Create a CrewAI LLM instance that uses our OpenAI model via langchain_openai
-llm = LLM(model="together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
-          api_key=os.environ.get("TOGETHER_API_KEY"),
-          base_url="https://api.together.xyz/v1"
+llm = LLM(model="openai/gpt-4o-mini",
+          api_key=os.environ.get("OPENAI_API_KEY")
         )
 label_generator = Agent(
     role="Label Generator",
